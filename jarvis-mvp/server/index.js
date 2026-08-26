@@ -34,6 +34,9 @@ const contentTypes = {
   ".md": "text/markdown; charset=utf-8"
 };
 
+const JOB_API_MODES = new Set(["ask", "analyze", "implement"]);
+const JOB_API_POLICY_LEVELS = new Set(["read", "write", "git", "network", "secrets", "destructive"]);
+
 ensureRuntime();
 initMemory();
 
@@ -155,8 +158,8 @@ async function createJobRoute(req, res) {
   try {
     const body = await readJson(req);
     const workspace = resolveWorkspace(body.workspace);
-    const mode = body.mode || "ask";
-    const policyLevel = body.policyLevel || (mode === "implement" ? "write" : "read");
+    const mode = normalizeJobMode(body.mode || "ask");
+    const policyLevel = normalizeJobPolicyLevel(body.policyLevel || (mode === "implement" ? "write" : "read"));
 
     assertPolicyAllowed(policyLevel);
 
@@ -213,6 +216,22 @@ function assertPolicyAllowed(policyLevel) {
   if (["secrets", "destructive"].includes(policyLevel)) {
     throw httpError(403, `Policy level is blocked for job creation: ${policyLevel}`);
   }
+}
+
+function normalizeJobMode(mode) {
+  const normalized = String(mode || "ask");
+  if (!JOB_API_MODES.has(normalized)) {
+    throw httpError(400, `Invalid job mode: ${normalized}. Use ask, analyze, or implement.`);
+  }
+  return normalized;
+}
+
+function normalizeJobPolicyLevel(policyLevel) {
+  const normalized = String(policyLevel || "read");
+  if (!JOB_API_POLICY_LEVELS.has(normalized)) {
+    throw httpError(400, `Invalid job policy level: ${normalized}.`);
+  }
+  return normalized;
 }
 
 function matchJobRoute(pathname) {
