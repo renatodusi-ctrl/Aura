@@ -37,6 +37,12 @@
 
           <div id="conversation" class="conversation" aria-live="polite"></div>
 
+          <div class="composer-intents" aria-label="Intencao da conversa">
+            <button type="button" data-composer-intent="chat" aria-pressed="true">Conversar</button>
+            <button type="button" data-composer-intent="council" aria-pressed="false">Consultar conselho</button>
+            <button type="button" data-composer-intent="execute" aria-pressed="false">Executar com Codex</button>
+          </div>
+
           <form id="local-form" class="composer">
             <input id="local-input" type="text" autocomplete="off" placeholder="Digite ou fale: guardar..., tarefa..., bom dia...">
             <button type="submit">Enviar</button>
@@ -54,6 +60,13 @@
         </section>
 
         <aside class="side-panel">
+          <section class="council-section" aria-labelledby="council-heading">
+            <div class="section-row">
+              <h2 id="council-heading">Conselho de IAs</h2>
+            </div>
+            <div id="ai-council" class="ai-council" aria-live="polite"></div>
+          </section>
+
           <section>
             <div class="section-row">
               <h2>Rotina</h2>

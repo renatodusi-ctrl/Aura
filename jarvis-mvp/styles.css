@@ -363,6 +363,26 @@ h2 {
   gap: 8px;
 }
 
+.composer-intents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.composer-intents button {
+  min-height: 34px;
+  padding: 0 11px;
+  color: var(--muted);
+  background: #10141a;
+}
+
+.composer-intents button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(88, 196, 184, .08);
+}
+
 input,
 select {
   min-width: 0;
@@ -419,6 +439,73 @@ select {
   margin-top: 12px;
   color: var(--muted);
   line-height: 1.5;
+}
+
+.council-section {
+  display: grid;
+  gap: 12px;
+}
+
+.ai-council {
+  display: grid;
+  gap: 8px;
+}
+
+.council-seat {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #11151b;
+}
+
+.council-seat div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.council-seat strong {
+  overflow-wrap: anywhere;
+}
+
+.council-seat span,
+.council-seat p {
+  color: var(--muted);
+}
+
+.council-seat p {
+  grid-column: 1 / -1;
+  line-height: 1.35;
+}
+
+.council-state {
+  align-self: start;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 7px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, .03);
+  white-space: nowrap;
+}
+
+.council-seat.ready .council-state {
+  color: var(--ok);
+  border-color: rgba(123, 216, 143, .45);
+}
+
+.council-seat.waiting .council-state,
+.council-seat.thinking .council-state {
+  color: var(--accent-2);
+  border-color: rgba(242, 184, 75, .45);
+}
+
+.council-seat.unavailable .council-state,
+.council-seat.error .council-state {
+  color: var(--danger);
+  border-color: rgba(239, 107, 107, .45);
 }
 
 .routine-job-form,

@@ -12,6 +12,8 @@ const state = {
   events: [],
   demandFilter: "all",
   sessionTab: "tasks",
+  composerIntent: "chat",
+  activeDemandTab: "summary",
   routineEnabled: localStorage.getItem("aura.routineEnabled") === "true",
   screenStream: null,
   realtime: null,
@@ -31,6 +33,7 @@ const els = {
   stopScreenButton: document.querySelector("#stop-screen-button"),
   localForm: document.querySelector("#local-form"),
   localInput: document.querySelector("#local-input"),
+  composerIntentButtons: Array.from(document.querySelectorAll("[data-composer-intent]")),
   conversation: document.querySelector("#conversation"),
   taskForm: document.querySelector("#task-form"),
   taskInput: document.querySelector("#task-input"),
@@ -43,6 +46,7 @@ const els = {
   jobList: document.querySelector("#job-list"),
   jobDetail: document.querySelector("#job-detail"),
   activeDemand: document.querySelector("#active-demand"),
+  aiCouncil: document.querySelector("#ai-council"),
   sessionTabButtons: Array.from(document.querySelectorAll("[data-session-tab]")),
   sessionPanels: Array.from(document.querySelectorAll("[data-session-panel]")),
   eventLog: document.querySelector("#event-log"),
@@ -119,6 +123,11 @@ function bindEvents() {
     els.localInput.value = "";
     appendMessage("user", text);
 
+    if (state.composerIntent !== "chat") {
+      await createComposerDemand(text);
+      return;
+    }
+
     if (state.realtime?.sendText(text)) {
       return;
     }
@@ -129,6 +138,13 @@ function bindEvents() {
       state.selectedJobId = response.job.id;
     }
     await refreshAll();
+  });
+
+  els.composerIntentButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      state.composerIntent = button.dataset.composerIntent;
+      renderComposerIntents();
+    });
   });
 
   els.taskForm.addEventListener("submit", async (event) => {
@@ -172,6 +188,35 @@ function bindEvents() {
   });
 }
 
+async function createComposerDemand(text) {
+  const mode = state.composerIntent === "execute" ? "implement" : "analyze";
+  try {
+    const result = await api("/api/jobs", {
+      method: "POST",
+      body: {
+        goal: text,
+        mode,
+        requestedBy: "text",
+        metadata: {
+          source: "composer-intent",
+          intent: state.composerIntent
+        }
+      }
+    });
+    state.selectedJobId = result.job.id;
+    state.demandFilter = "all";
+    appendMessage(
+      "assistant",
+      state.composerIntent === "execute"
+        ? `Demanda ${result.job.id} preparada para execucao com Codex. Revise a confirmacao visual antes de escrever.`
+        : `Demanda ${result.job.id} enviada para o Conselho de IAs.`
+    );
+    await refreshAll();
+  } catch (error) {
+    appendMessage("system", `Demanda nao criada: ${error.message}`);
+  }
+}
+
 async function refreshAll() {
   const [status, tasksData, memoriesData, jobsData] = await Promise.all([
     api("/api/status"),
@@ -190,6 +235,8 @@ async function refreshAll() {
   renderMemories();
   renderJobs();
   renderTools();
+  renderComposerIntents();
+  renderCouncil();
   renderSessionTabs();
   renderRoutine();
 }
@@ -199,6 +246,7 @@ async function refreshJobs() {
   state.jobs = jobsData.jobs;
   await loadSelectedJob();
   renderJobs();
+  renderCouncil();
 }
 
 async function loadSelectedJob() {
@@ -252,6 +300,120 @@ function renderProviderPill(element, provider = {}) {
   element.title = provider.available
     ? `${name} disponivel${provider.version ? `: ${provider.version}` : "."}`
     : provider.error || `${name} ainda nao verificado.`;
+}
+
+function renderComposerIntents() {
+  els.composerIntentButtons.forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.composerIntent === state.composerIntent));
+  });
+}
+
+function renderCouncil() {
+  const seats = [
+    councilSeatFor("codex", "Codex", "Executor local", "Arquivos, comandos e workspace."),
+    councilSeatFor("gemini", "Gemini", "Analise alternativa", "Amplitude, contexto e comparacao."),
+    councilSeatFor("grok", "Grok", "Critica e riscos", "Contrapontos, riscos e caminhos alternativos.")
+  ];
+
+  els.aiCouncil.replaceChildren(...seats.map((seat) => {
+    const item = document.createElement("article");
+    item.className = `council-seat ${seat.state}`;
+
+    const header = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = seat.name;
+    const role = document.createElement("span");
+    role.textContent = seat.role;
+    header.append(title, role);
+
+    const state = document.createElement("small");
+    state.className = "council-state";
+    state.textContent = seat.label;
+
+    const summary = document.createElement("p");
+    summary.textContent = seat.summary;
+
+    item.append(header, state, summary);
+    return item;
+  }));
+}
+
+function councilSeatFor(key, name, role, idleSummary) {
+  const provider = state.status?.providers?.[key];
+  if (provider && !provider.available) {
+    return {
+      name,
+      role,
+      state: "unavailable",
+      label: "indisponivel",
+      summary: provider.error || `${name} nao esta disponivel neste ambiente.`
+    };
+  }
+
+  const job = state.selectedJob;
+  if (!job) {
+    return {
+      name,
+      role,
+      state: "ready",
+      label: provider?.available ? "pronto" : "aguardando",
+      summary: idleSummary
+    };
+  }
+
+  if (key === "codex") {
+    return codexCouncilState(job, name, role);
+  }
+
+  return analystCouncilState(job, key, name, role);
+}
+
+function codexCouncilState(job, name, role) {
+  if (job.mode === "implement") {
+    if (job.status === "awaiting_confirm") {
+      return { name, role, state: "waiting", label: "aguardando", summary: "Pronto para executar depois da sua confirmacao visual." };
+    }
+    if (job.status === "running") {
+      return { name, role, state: "thinking", label: "executando", summary: "Codex esta trabalhando no workspace local." };
+    }
+    if (job.status === "done") {
+      return { name, role, state: "ready", label: "concluido", summary: "Execucao finalizada; confira os artefatos da demanda." };
+    }
+    if (job.status === "failed") {
+      return { name, role, state: "error", label: "erro", summary: "Execucao bloqueada ou falhou; veja o resumo da demanda." };
+    }
+    return { name, role, state: "waiting", label: "aguardando", summary: "Demanda preparada para execucao local." };
+  }
+
+  return { name, role, state: "ready", label: "pronto", summary: "Executor em espera; esta demanda ainda nao pediu escrita local." };
+}
+
+function analystCouncilState(job, key, name, role) {
+  const hasResponse = state.selectedJobArtifacts.some((artifact) => artifact.kind === "analyst-response" && artifact.metadata?.name === key);
+  if (hasResponse) {
+    return { name, role, state: "ready", label: "respondeu", summary: `${name} ja contribuiu para esta demanda.` };
+  }
+  if (job.mode === "analyze") {
+    if (job.status === "running") {
+      return { name, role, state: "thinking", label: "pensando", summary: `${name} pode estar analisando esta demanda.` };
+    }
+    if (job.status === "failed") {
+      return { name, role, state: "error", label: "erro", summary: `${name} nao retornou uma contribuicao valida para esta demanda.` };
+    }
+    return { name, role, state: "waiting", label: "aguardando", summary: "Aguardando consulta do conselho para analisar a demanda." };
+  }
+
+  return { name, role, state: "ready", label: "pronto", summary: "Disponivel para contraponto quando voce consultar o conselho." };
+}
+
+function councilSummaryForJob(job) {
+  if (job.mode === "analyze") {
+    return "Gemini e Grok entram como analistas; Codex permanece em espera ate haver decisao de execucao.";
+  }
+  if (job.mode === "implement") {
+    return "Codex e o executor desta demanda; Gemini e Grok continuam visiveis para revisao e contraponto.";
+  }
+  return "Conselho em espera. Use Consultar conselho para pedir analise de Gemini e Grok.";
 }
 
 function renderTasks() {
@@ -319,6 +481,7 @@ function renderJobs() {
     els.jobList.replaceChildren(empty);
     renderJobDetail();
     renderActiveDemand();
+    renderCouncil();
     return;
   }
 
@@ -330,6 +493,7 @@ function renderJobs() {
     els.jobList.replaceChildren(empty);
     renderJobDetail();
     renderActiveDemand();
+    renderCouncil();
     return;
   }
 
@@ -364,6 +528,7 @@ function renderJobs() {
 
   renderJobDetail();
   renderActiveDemand();
+  renderCouncil();
 }
 
 function renderDemandFilters() {
@@ -434,14 +599,28 @@ function renderActiveDemand() {
   tabs.className = "active-demand-tabs";
   tabs.setAttribute("role", "tablist");
   tabs.setAttribute("aria-label", "Inspector da demanda atual");
-  for (const [label, selected] of [["Resumo", true], ["Conselho", false], ["Artefatos", false], ["Eventos tecnicos", false]]) {
+  const tabItems = [
+    ["summary", "Resumo", false],
+    ["council", "Conselho", false],
+    ["artifacts", "Artefatos", true],
+    ["events", "Eventos tecnicos", true]
+  ];
+  for (const [key, label, disabled] of tabItems) {
     const button = document.createElement("button");
     button.type = "button";
     button.setAttribute("role", "tab");
-    button.setAttribute("aria-selected", String(selected));
-    if (!selected) {
+    button.setAttribute("aria-selected", String(state.activeDemandTab === key));
+    if (disabled) {
       button.disabled = true;
       button.title = "Disponivel nas proximas etapas do cockpit.";
+    } else {
+      button.addEventListener("click", () => {
+        state.activeDemandTab = key;
+        renderActiveDemand();
+        if (key === "council") {
+          document.querySelector(".council-section").scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+      });
     }
     button.textContent = label;
     tabs.append(button);
@@ -459,6 +638,18 @@ function renderActiveDemand() {
   action.addEventListener("click", () => {
     document.querySelector(".jobs-panel").scrollIntoView({ behavior: "smooth", block: "start" });
   });
+
+  if (state.activeDemandTab === "council") {
+    const councilHint = document.createElement("p");
+    councilHint.className = "active-demand-next";
+    const label = document.createElement("strong");
+    label.textContent = "Conselho";
+    const copy = document.createElement("span");
+    copy.textContent = councilSummaryForJob(job);
+    councilHint.append(label, copy);
+    els.activeDemand.append(status, goal, meta, tabs, councilHint, action);
+    return;
+  }
 
   els.activeDemand.append(status, goal, meta, tabs, next, facts, action);
 }
