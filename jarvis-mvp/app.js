@@ -18,7 +18,11 @@ const state = {
 
 const els = {
   realtimePill: document.querySelector("#realtime-pill"),
-  dbPill: document.querySelector("#db-pill"),
+  privacyPill: document.querySelector("#privacy-pill"),
+  tasksPill: document.querySelector("#tasks-pill"),
+  geminiPill: document.querySelector("#gemini-pill"),
+  grokPill: document.querySelector("#grok-pill"),
+  codexPill: document.querySelector("#codex-pill"),
   routineToggle: document.querySelector("#routine-toggle"),
   voiceButton: document.querySelector("#voice-button"),
   screenButton: document.querySelector("#screen-button"),
@@ -196,9 +200,36 @@ async function loadSelectedJob() {
 }
 
 function renderStatus() {
-  els.realtimePill.textContent = state.status.realtimeEnabled ? "Realtime pronto" : "Fallback local";
+  els.privacyPill.textContent = "Local privado";
+  els.privacyPill.title = "Servidor local em 127.0.0.1; chave OpenAI fica no servidor.";
+
+  els.realtimePill.textContent = state.status.realtimeEnabled ? "Voz ao vivo" : "Voz local";
   els.realtimePill.className = `pill ${state.status.realtimeEnabled ? "ok" : "warn"}`;
-  els.dbPill.textContent = `${state.status.memory.openTasks} tarefas abertas`;
+  els.realtimePill.title = state.status.realtimeEnabled
+    ? `Realtime ${state.status.realtimeModel} com voz ${state.status.realtimeVoice}.`
+    : "OPENAI_API_KEY ausente; AURA opera com fallback local.";
+
+  els.tasksPill.textContent = `${state.status.memory.openTasks} tarefas abertas`;
+  els.tasksPill.className = "pill";
+
+  renderProviderPill(els.geminiPill, state.status.providers?.gemini);
+  renderProviderPill(els.grokPill, state.status.providers?.grok);
+  renderProviderPill(els.codexPill, state.status.providers?.codex);
+}
+
+function renderProviderPill(element, provider = {}) {
+  const name = provider.label || provider.name || element.textContent;
+  const status = provider.status || "checking";
+  const labels = {
+    available: "pronto",
+    unavailable: "indisponivel",
+    checking: "verificando"
+  };
+  element.className = `provider-pill ${status}`;
+  element.textContent = `${name} ${labels[status] || status}`;
+  element.title = provider.available
+    ? `${name} disponivel${provider.version ? `: ${provider.version}` : "."}`
+    : provider.error || `${name} ainda nao verificado.`;
 }
 
 function renderTasks() {

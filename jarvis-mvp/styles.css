@@ -73,6 +73,17 @@ button.secondary {
 
 .topbar {
   margin-bottom: 20px;
+  min-height: 74px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(25, 29, 36, .82);
+}
+
+.brand-lockup {
+  display: grid;
+  gap: 2px;
+  min-width: 120px;
 }
 
 .eyebrow {
@@ -90,8 +101,8 @@ p {
 }
 
 h1 {
-  font-size: clamp(36px, 7vw, 72px);
-  line-height: .9;
+  font-size: 30px;
+  line-height: 1;
 }
 
 h2 {
@@ -103,11 +114,16 @@ h2 {
   margin-top: 6px;
 }
 
-.status {
+.status,
+.status-strip {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.status-strip {
+  align-items: center;
 }
 
 .pill {
@@ -127,6 +143,61 @@ h2 {
 
 .pill.warn {
   color: var(--accent-2);
+}
+
+.provider-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.provider-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 10px;
+  color: var(--muted);
+  background: #10141a;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.provider-pill::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.provider-pill.available {
+  border-color: rgba(123, 216, 143, .45);
+  color: var(--ok);
+}
+
+.provider-pill.available::before {
+  background: var(--ok);
+}
+
+.provider-pill.unavailable {
+  border-color: rgba(239, 107, 107, .45);
+  color: var(--danger);
+}
+
+.provider-pill.unavailable::before {
+  background: var(--danger);
+}
+
+.provider-pill.checking {
+  border-color: rgba(242, 184, 75, .45);
+  color: var(--accent-2);
+}
+
+.provider-pill.checking::before {
+  background: var(--accent-2);
 }
 
 .cockpit,
@@ -677,7 +748,8 @@ video {
     flex-direction: column;
   }
 
-  .status {
+  .status,
+  .status-strip {
     justify-content: flex-start;
   }
 

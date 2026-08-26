@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { config, ensureRuntime, ROOT_DIR } from "./config.js";
 import {
@@ -81,6 +82,7 @@ async function route(req, res) {
   }
 
   if (url.pathname === "/api/status" && method === "GET") {
+    const providers = await getProviderPreflight();
     return sendJson(res, 200, {
       ok: true,
       realtimeEnabled: Boolean(config.openaiApiKey),
@@ -89,6 +91,7 @@ async function route(req, res) {
       dailyRoutineHour: config.dailyRoutineHour,
       jobHistoryRetentionDays: config.jobHistoryRetentionDays,
       jobExportDir: config.jobExportDir,
+      providers,
       memory: getStatus(),
       tools: listTools()
     });
@@ -591,6 +594,125 @@ function realtimeSessionPayload() {
       }
     }
   };
+}
+
+async function getProviderPreflight() {
+  const providers = {
+    gemini: {
+      name: "gemini",
+      label: "Gemini",
+      bin: process.env.AURA_GEMINI_BIN || "gemini",
+      args: ["--version"]
+    },
+    grok: {
+      name: "grok",
+      label: "Grok",
+      bin: process.env.AURA_GROK_BIN || "grok",
+      args: ["--version"]
+    },
+    codex: {
+      name: "codex",
+      label: "Codex",
+      bin: process.env.AURA_CODEX_BIN || "codex",
+      args: ["--version"]
+    }
+  };
+
+  const entries = await Promise.all(Object.entries(providers).map(async ([key, provider]) => {
+    const probe = await runProviderProbe(provider.bin, provider.args, 1800);
+    return [key, {
+      name: provider.name,
+      label: provider.label,
+      status: probe.available ? "available" : "unavailable",
+      available: probe.available,
+      bin: provider.bin,
+      version: probe.version,
+      error: probe.error
+    }];
+  }));
+
+  return Object.fromEntries(entries);
+}
+
+function runProviderProbe(command, args, timeoutMs) {
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let child;
+
+    const finish = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve(result);
+    };
+
+    const timeout = setTimeout(() => {
+      child?.kill("SIGTERM");
+      finish({
+        available: false,
+        version: null,
+        error: `${command} nao respondeu ao preflight em ${timeoutMs} ms.`
+      });
+    }, timeoutMs);
+
+    try {
+      child = spawn(command, args, {
+        env: filteredProviderEnv(),
+        windowsHide: true
+      });
+    } catch (error) {
+      finish({
+        available: false,
+        version: null,
+        error: error.code === "ENOENT" ? `${command} nao encontrado no PATH.` : error.message
+      });
+      return;
+    }
+
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      finish({
+        available: false,
+        version: null,
+        error: error.code === "ENOENT" ? `${command} nao encontrado no PATH.` : error.message
+      });
+    });
+    child.on("close", (exitCode) => {
+      if (exitCode === 0) {
+        finish({
+          available: true,
+          version: stdout.trim() || "unknown",
+          error: null
+        });
+        return;
+      }
+
+      finish({
+        available: false,
+        version: null,
+        error: stderr.trim() || stdout.trim() || `${command} retornou codigo ${exitCode}.`
+      });
+    });
+  });
+}
+
+function filteredProviderEnv() {
+  const env = {};
+  for (const name of ["PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP", "SystemRoot", "ComSpec", "PATHEXT"]) {
+    if (process.env[name]) {
+      env[name] = process.env[name];
+    }
+  }
+  return env;
 }
 
 async function readJson(req) {

@@ -9,13 +9,19 @@
   <body>
     <main class="shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">Assistente local</p>
+        <div class="brand-lockup">
+          <p class="eyebrow">Cockpit local</p>
           <h1>AURA</h1>
         </div>
-        <div class="status">
-          <span id="realtime-pill" class="pill">Inicializando</span>
-          <span id="db-pill" class="pill">SQLite</span>
+        <div class="status-strip" aria-label="Status do cockpit">
+          <span id="privacy-pill" class="pill ok">Local privado</span>
+          <span id="realtime-pill" class="pill">Voz verificando</span>
+          <span id="tasks-pill" class="pill">Tarefas</span>
+          <div class="provider-strip" aria-label="Preflight dos provedores">
+            <span id="gemini-pill" class="provider-pill checking">Gemini</span>
+            <span id="grok-pill" class="provider-pill checking">Grok</span>
+            <span id="codex-pill" class="provider-pill checking">Codex</span>
+          </div>
         </div>
       </header>
 
