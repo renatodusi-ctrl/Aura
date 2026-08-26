@@ -93,6 +93,8 @@ Related tables:
 - `approvals`: explicit approval records;
 - `artifacts`: diffs, test logs, generated files, exported briefs.
 
+The initial implemented schema is documented in `docs/JOBS.md`.
+
 ## Policy Model
 
 The current per-tool confirmation model should become a central policy engine.

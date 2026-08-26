@@ -3,6 +3,10 @@ import { config } from "./config.js";
 
 let db;
 
+const JOB_MODES = new Set(["ask", "analyze", "implement"]);
+const JOB_STATUSES = new Set(["draft", "awaiting_confirm", "queued", "running", "needs_input", "done", "failed", "cancelled"]);
+const POLICY_LEVELS = new Set(["read", "write", "git", "network", "secrets", "destructive"]);
+
 export function initMemory() {
   db = new DatabaseSync(config.databasePath);
   db.exec(`
@@ -35,6 +39,43 @@ export function initMemory() {
       output TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      goal TEXT NOT NULL,
+      workspace TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'ask'
+        CHECK (mode IN ('ask', 'analyze', 'implement')),
+      status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'awaiting_confirm', 'queued', 'running', 'needs_input', 'done', 'failed', 'cancelled')),
+      requested_by TEXT NOT NULL DEFAULT 'text',
+      policy_level TEXT NOT NULL DEFAULT 'read'
+        CHECK (policy_level IN ('read', 'write', 'git', 'network', 'secrets', 'destructive')),
+      requires_confirmation INTEGER NOT NULL DEFAULT 0
+        CHECK (requires_confirmation IN (0, 1)),
+      timeout_ms INTEGER NOT NULL DEFAULT 300000,
+      error TEXT,
+      summary TEXT,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      started_at TEXT,
+      finished_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS job_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      message TEXT,
+      data TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+    CREATE INDEX IF NOT EXISTS idx_jobs_workspace ON jobs(workspace);
+    CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id, id);
   `);
 }
 
@@ -42,11 +83,15 @@ export function getStatus() {
   const memoryCount = db.prepare("SELECT COUNT(*) AS count FROM memories").get().count;
   const openTasks = db.prepare("SELECT COUNT(*) AS count FROM tasks WHERE status = 'open'").get().count;
   const completedTasks = db.prepare("SELECT COUNT(*) AS count FROM tasks WHERE status = 'done'").get().count;
+  const jobCount = db.prepare("SELECT COUNT(*) AS count FROM jobs").get().count;
+  const runningJobs = db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE status = 'running'").get().count;
   return {
     database: config.databasePath,
     memoryCount,
     openTasks,
-    completedTasks
+    completedTasks,
+    jobCount,
+    runningJobs
   };
 }
 
@@ -138,4 +183,218 @@ export function recordToolRun(name, status, input, output) {
     JSON.stringify(input || {}),
     JSON.stringify(output || {})
   );
+}
+
+export function createJob({
+  goal,
+  workspace,
+  mode = "ask",
+  status = "draft",
+  requestedBy = "text",
+  policyLevel = "read",
+  requiresConfirmation = false,
+  timeoutMs = 300000,
+  metadata = {}
+}) {
+  const normalized = normalizeJobInput({ goal, workspace, mode, status, policyLevel, timeoutMs });
+  const result = db.prepare(`
+    INSERT INTO jobs (
+      goal, workspace, mode, status, requested_by, policy_level,
+      requires_confirmation, timeout_ms, metadata
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    normalized.goal,
+    normalized.workspace,
+    normalized.mode,
+    normalized.status,
+    String(requestedBy || "text"),
+    normalized.policyLevel,
+    requiresConfirmation ? 1 : 0,
+    normalized.timeoutMs,
+    JSON.stringify(metadata || {})
+  );
+
+  const job = getJob(result.lastInsertRowid);
+  recordJobEvent(job.id, "job.created", "Job created.", {
+    status: job.status,
+    mode: job.mode,
+    policyLevel: job.policyLevel
+  });
+  return job;
+}
+
+export function listJobs(limit = 50) {
+  return db.prepare(`
+    SELECT ${jobSelectColumns()}
+    FROM jobs
+    ORDER BY id DESC
+    LIMIT ?
+  `).all(limit).map(formatJob);
+}
+
+export function getJob(id) {
+  const job = db.prepare(`
+    SELECT ${jobSelectColumns()}
+    FROM jobs
+    WHERE id = ?
+  `).get(Number(id));
+  return job ? formatJob(job) : null;
+}
+
+export function listJobEvents(jobId) {
+  return db.prepare(`
+    SELECT
+      id,
+      job_id AS jobId,
+      type,
+      message,
+      data,
+      created_at AS createdAt
+    FROM job_events
+    WHERE job_id = ?
+    ORDER BY id ASC
+  `).all(Number(jobId)).map(formatJobEvent);
+}
+
+export function recordJobEvent(jobId, type, message = "", data = {}) {
+  const job = getJob(jobId);
+  if (!job) {
+    throw new Error("Job not found.");
+  }
+
+  const result = db.prepare(`
+    INSERT INTO job_events (job_id, type, message, data)
+    VALUES (?, ?, ?, ?)
+  `).run(Number(jobId), String(type || "job.event"), message || null, JSON.stringify(data || {}));
+
+  return db.prepare(`
+    SELECT
+      id,
+      job_id AS jobId,
+      type,
+      message,
+      data,
+      created_at AS createdAt
+    FROM job_events
+    WHERE id = ?
+  `).get(result.lastInsertRowid);
+}
+
+export function updateJobStatus(id, status, { error = null, summary = null } = {}) {
+  if (!JOB_STATUSES.has(status)) {
+    throw new Error(`Invalid job status: ${status}`);
+  }
+
+  const current = getJob(id);
+  if (!current) {
+    throw new Error("Job not found.");
+  }
+
+  const startedAt = status === "running" && !current.startedAt ? new Date().toISOString() : current.startedAt;
+  const finishedAt = ["done", "failed", "cancelled"].includes(status) ? new Date().toISOString() : current.finishedAt;
+
+  db.prepare(`
+    UPDATE jobs
+    SET
+      status = ?,
+      error = ?,
+      summary = ?,
+      started_at = ?,
+      finished_at = ?,
+      updated_at = datetime('now')
+    WHERE id = ?
+  `).run(status, error, summary, startedAt, finishedAt, Number(id));
+
+  const job = getJob(id);
+  recordJobEvent(job.id, "job.status_changed", `Job status changed to ${status}.`, {
+    from: current.status,
+    to: status,
+    error,
+    summary
+  });
+  return job;
+}
+
+function normalizeJobInput({ goal, workspace, mode, status, policyLevel, timeoutMs }) {
+  const normalizedGoal = String(goal || "").trim();
+  const normalizedWorkspace = String(workspace || "").trim();
+
+  if (!normalizedGoal) {
+    throw new Error("Job goal is required.");
+  }
+
+  if (!normalizedWorkspace) {
+    throw new Error("Job workspace is required.");
+  }
+
+  if (!JOB_MODES.has(mode)) {
+    throw new Error(`Invalid job mode: ${mode}`);
+  }
+
+  if (!JOB_STATUSES.has(status)) {
+    throw new Error(`Invalid job status: ${status}`);
+  }
+
+  if (!POLICY_LEVELS.has(policyLevel)) {
+    throw new Error(`Invalid job policy level: ${policyLevel}`);
+  }
+
+  const parsedTimeout = Number.parseInt(timeoutMs, 10);
+  if (!Number.isFinite(parsedTimeout) || parsedTimeout <= 0) {
+    throw new Error("Job timeout must be a positive integer.");
+  }
+
+  return {
+    goal: normalizedGoal,
+    workspace: normalizedWorkspace,
+    mode,
+    status,
+    policyLevel,
+    timeoutMs: parsedTimeout
+  };
+}
+
+function jobSelectColumns() {
+  return `
+    id,
+    goal,
+    workspace,
+    mode,
+    status,
+    requested_by AS requestedBy,
+    policy_level AS policyLevel,
+    requires_confirmation AS requiresConfirmation,
+    timeout_ms AS timeoutMs,
+    error,
+    summary,
+    metadata,
+    created_at AS createdAt,
+    updated_at AS updatedAt,
+    started_at AS startedAt,
+    finished_at AS finishedAt
+  `;
+}
+
+function formatJob(job) {
+  return {
+    ...job,
+    requiresConfirmation: Boolean(job.requiresConfirmation),
+    metadata: parseJson(job.metadata, {})
+  };
+}
+
+function formatJobEvent(event) {
+  return {
+    ...event,
+    data: parseJson(event.data, {})
+  };
+}
+
+function parseJson(value, fallback) {
+  try {
+    return JSON.parse(value || "");
+  } catch {
+    return fallback;
+  }
 }
