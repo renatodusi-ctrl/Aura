@@ -42,6 +42,7 @@ const els = {
   demandFilterButtons: Array.from(document.querySelectorAll("[data-demand-filter]")),
   jobList: document.querySelector("#job-list"),
   jobDetail: document.querySelector("#job-detail"),
+  activeDemand: document.querySelector("#active-demand"),
   sessionTabButtons: Array.from(document.querySelectorAll("[data-session-tab]")),
   sessionPanels: Array.from(document.querySelectorAll("[data-session-panel]")),
   eventLog: document.querySelector("#event-log"),
@@ -317,6 +318,7 @@ function renderJobs() {
     empty.textContent = "Nenhuma demanda registrada.";
     els.jobList.replaceChildren(empty);
     renderJobDetail();
+    renderActiveDemand();
     return;
   }
 
@@ -327,6 +329,7 @@ function renderJobs() {
     empty.textContent = "Nenhuma demanda neste filtro.";
     els.jobList.replaceChildren(empty);
     renderJobDetail();
+    renderActiveDemand();
     return;
   }
 
@@ -360,6 +363,7 @@ function renderJobs() {
   }));
 
   renderJobDetail();
+  renderActiveDemand();
 }
 
 function renderDemandFilters() {
@@ -387,6 +391,76 @@ function renderSessionTabs() {
   els.sessionPanels.forEach((panel) => {
     panel.hidden = panel.dataset.sessionPanel !== state.sessionTab;
   });
+}
+
+function renderActiveDemand() {
+  els.activeDemand.replaceChildren();
+
+  if (!state.selectedJob) {
+    const empty = document.createElement("div");
+    empty.className = "active-demand-empty";
+
+    const title = document.createElement("strong");
+    title.textContent = "Nenhuma demanda ativa";
+    const copy = document.createElement("p");
+    copy.textContent = "Quando voce criar ou selecionar uma demanda, AURA mostra aqui objetivo, status e proximo passo.";
+
+    empty.append(title, copy);
+    els.activeDemand.append(empty);
+    return;
+  }
+
+  const job = state.selectedJob;
+  const status = document.createElement("span");
+  status.className = `status-chip ${job.status}`;
+  status.textContent = labelForJobStatus(job.status);
+
+  const goal = document.createElement("h3");
+  goal.textContent = job.goal;
+
+  const meta = document.createElement("p");
+  meta.className = "active-demand-meta";
+  meta.textContent = `Demanda #${job.id} · ${labelForJobMode(job.mode)} · ${labelForPolicy(job.policyLevel)}`;
+
+  const next = document.createElement("p");
+  next.className = "active-demand-next";
+  const nextLabel = document.createElement("strong");
+  nextLabel.textContent = "Proximo passo";
+  const nextText = document.createElement("span");
+  nextText.textContent = nextStepForJob(job);
+  next.append(nextLabel, nextText);
+
+  const tabs = document.createElement("div");
+  tabs.className = "active-demand-tabs";
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "Inspector da demanda atual");
+  for (const [label, selected] of [["Resumo", true], ["Conselho", false], ["Artefatos", false], ["Eventos tecnicos", false]]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(selected));
+    if (!selected) {
+      button.disabled = true;
+      button.title = "Disponivel nas proximas etapas do cockpit.";
+    }
+    button.textContent = label;
+    tabs.append(button);
+  }
+
+  const facts = document.createElement("dl");
+  facts.className = "active-demand-facts";
+  appendFact(facts, "Criada", formatDateTime(job.createdAt));
+  appendFact(facts, "Atualizada", formatDateTime(job.updatedAt));
+
+  const action = document.createElement("button");
+  action.type = "button";
+  action.className = "secondary";
+  action.textContent = "Ver no historico";
+  action.addEventListener("click", () => {
+    document.querySelector(".jobs-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  els.activeDemand.append(status, goal, meta, tabs, next, facts, action);
 }
 
 function renderJobDetail() {
@@ -879,6 +953,20 @@ function labelForPolicy(policyLevel) {
     destructive: "destrutivo"
   };
   return labels[policyLevel] || policyLevel;
+}
+
+function nextStepForJob(job) {
+  const steps = {
+    draft: "Revisar a demanda e aprovar quando estiver pronta.",
+    awaiting_confirm: "Aguardando sua confirmacao visual para continuar.",
+    queued: "AURA colocou a demanda na fila de execucao.",
+    running: "AURA esta trabalhando nesta demanda agora.",
+    needs_input: "AURA precisa de uma resposta sua para prosseguir.",
+    done: "Resultado disponivel no historico da demanda.",
+    failed: "Verificar erro e decidir se a demanda deve ser reaberta ou ajustada.",
+    cancelled: "Demanda cancelada; nenhuma execucao pendente."
+  };
+  return steps[job.status] || "Acompanhar o andamento no historico.";
 }
 
 function formatDateTime(value) {
