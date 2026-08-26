@@ -14,7 +14,8 @@ export async function runJobCommand({
   args = [],
   cwd,
   timeoutMs = 300000,
-  env = {}
+  env = {},
+  input = ""
 }) {
   const job = getJob(jobId);
   if (!job) {
@@ -75,6 +76,12 @@ export async function runJobCommand({
       active.stderr += error.message;
       recordJobEvent(job.id, "process.error", "Process failed to start.", { error: error.message });
     });
+
+    if (input) {
+      child.stdin?.end(input);
+    } else {
+      child.stdin?.end();
+    }
 
     child.on("close", (exitCode, signal) => {
       clearTimeout(active.timeout);

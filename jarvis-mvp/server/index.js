@@ -22,6 +22,7 @@ import { getLocalContext, listTools, runTool } from "./tools.js";
 import { evaluateJobPolicy, normalizePolicyLevel, POLICY_LEVELS } from "./policy.js";
 import { createSessionToken, isAllowedOrigin, isProtectedApiPath, validateSessionRequest } from "./httpSecurity.js";
 import { cancelJobProcess } from "./supervisor.js";
+import { detectCodex, runCodexAsk } from "./codexAdapter.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -117,6 +118,10 @@ async function route(req, res) {
 
   if (jobRoute && method === "POST" && jobRoute.action === "cancel") {
     return cancelJobRoute(jobRoute.id, res);
+  }
+
+  if (jobRoute && method === "POST" && jobRoute.action === "codex/ask") {
+    return codexAskRoute(jobRoute.id, req, res);
   }
 
   if (url.pathname === "/api/memories" && method === "GET") {
@@ -243,6 +248,21 @@ function cancelJobRoute(id, res) {
   }
 }
 
+async function codexAskRoute(id, req, res) {
+  try {
+    const body = await readJson(req);
+    const output = await runCodexAsk({
+      jobId: id,
+      prompt: body.prompt,
+      bin: body.bin,
+      timeoutMs: body.timeoutMs
+    });
+    return sendJson(res, output.job.status === "failed" ? 503 : 200, output);
+  } catch (error) {
+    return sendJson(res, 400, { error: error.message || "Could not run Codex ask." });
+  }
+}
+
 function resolveWorkspace(workspace = ROOT_DIR) {
   const resolved = path.resolve(String(workspace || ROOT_DIR));
   let stat;
@@ -288,7 +308,7 @@ function policyLevelForJobMode(mode, policyLevel) {
 }
 
 function matchJobRoute(pathname) {
-  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel))?$/);
+  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|codex\/ask))?$/);
   if (!match) {
     return null;
   }

@@ -63,6 +63,8 @@ When a `write` or `git` job already exists in a non-terminal state for a workspa
 
 Process execution is owned by `server/supervisor.js`. The supervisor records process start, stdout, stderr, timeout, cancellation and finish events on the parent job.
 
+Codex read-only ask execution is owned by `server/codexAdapter.js`. It only accepts `mode=ask` and `policy_level=read` jobs, runs `codex exec` with `--sandbox read-only`, and records detection, stdout, stderr, exit status and final message on the job timeline.
+
 Create payload:
 
 ```json
