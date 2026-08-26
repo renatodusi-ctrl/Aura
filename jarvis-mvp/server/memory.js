@@ -6,6 +6,18 @@ let db;
 const JOB_MODES = new Set(["ask", "analyze", "implement"]);
 const JOB_STATUSES = new Set(["draft", "awaiting_confirm", "queued", "running", "needs_input", "done", "failed", "cancelled"]);
 const POLICY_LEVELS = new Set(["read", "write", "git", "network", "secrets", "destructive"]);
+const REQUEST_SOURCES = new Set(["text", "voice", "routine"]);
+const TERMINAL_JOB_STATUSES = new Set(["done", "failed", "cancelled"]);
+const JOB_STATUS_TRANSITIONS = new Map([
+  ["draft", new Set(["awaiting_confirm", "queued", "running", "failed", "cancelled"])],
+  ["awaiting_confirm", new Set(["queued", "failed", "cancelled"])],
+  ["queued", new Set(["running", "failed", "cancelled"])],
+  ["running", new Set(["needs_input", "done", "failed", "cancelled"])],
+  ["needs_input", new Set(["running", "failed", "cancelled"])],
+  ["done", new Set()],
+  ["failed", new Set()],
+  ["cancelled", new Set()]
+]);
 
 export function initMemory() {
   db = new DatabaseSync(config.databasePath);
@@ -48,7 +60,8 @@ export function initMemory() {
         CHECK (mode IN ('ask', 'analyze', 'implement')),
       status TEXT NOT NULL DEFAULT 'draft'
         CHECK (status IN ('draft', 'awaiting_confirm', 'queued', 'running', 'needs_input', 'done', 'failed', 'cancelled')),
-      requested_by TEXT NOT NULL DEFAULT 'text',
+      requested_by TEXT NOT NULL DEFAULT 'text'
+        CHECK (requested_by IN ('text', 'voice', 'routine')),
       policy_level TEXT NOT NULL DEFAULT 'read'
         CHECK (policy_level IN ('read', 'write', 'git', 'network', 'secrets', 'destructive')),
       requires_confirmation INTEGER NOT NULL DEFAULT 0
@@ -196,32 +209,40 @@ export function createJob({
   timeoutMs = 300000,
   metadata = {}
 }) {
-  const normalized = normalizeJobInput({ goal, workspace, mode, status, policyLevel, timeoutMs });
-  const result = db.prepare(`
-    INSERT INTO jobs (
-      goal, workspace, mode, status, requested_by, policy_level,
-      requires_confirmation, timeout_ms, metadata
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    normalized.goal,
-    normalized.workspace,
-    normalized.mode,
-    normalized.status,
-    String(requestedBy || "text"),
-    normalized.policyLevel,
-    requiresConfirmation ? 1 : 0,
-    normalized.timeoutMs,
-    JSON.stringify(metadata || {})
-  );
+  const normalized = normalizeJobInput({ goal, workspace, mode, status, requestedBy, policyLevel, timeoutMs });
+  const normalizedMetadata = normalizeJsonObject(metadata, "Job metadata");
+  if (normalized.status !== "draft") {
+    throw new Error("New jobs must start as draft.");
+  }
 
-  const job = getJob(result.lastInsertRowid);
-  recordJobEvent(job.id, "job.created", "Job created.", {
-    status: job.status,
-    mode: job.mode,
-    policyLevel: job.policyLevel
+  const jobId = withTransaction(() => {
+    const result = db.prepare(`
+      INSERT INTO jobs (
+        goal, workspace, mode, status, requested_by, policy_level,
+        requires_confirmation, timeout_ms, metadata
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      normalized.goal,
+      normalized.workspace,
+      normalized.mode,
+      normalized.status,
+      normalized.requestedBy,
+      normalized.policyLevel,
+      requiresConfirmation ? 1 : 0,
+      normalized.timeoutMs,
+      JSON.stringify(normalizedMetadata)
+    );
+
+    insertJobEvent(result.lastInsertRowid, "job.created", "Job created.", {
+      status: normalized.status,
+      mode: normalized.mode,
+      policyLevel: normalized.policyLevel
+    });
+    return Number(result.lastInsertRowid);
   });
-  return job;
+
+  return getJob(jobId);
 }
 
 export function listJobs(limit = 50) {
@@ -263,12 +284,62 @@ export function recordJobEvent(jobId, type, message = "", data = {}) {
     throw new Error("Job not found.");
   }
 
+  return insertJobEvent(jobId, type, message, data);
+}
+
+export function updateJobStatus(id, status, patch = {}) {
+  if (!JOB_STATUSES.has(status)) {
+    throw new Error(`Invalid job status: ${status}`);
+  }
+
+  const current = getJob(id);
+  if (!current) {
+    throw new Error("Job not found.");
+  }
+
+  assertJobTransition(current.status, status);
+
+  const nextError = Object.hasOwn(patch, "error") ? patch.error : current.error;
+  const nextSummary = Object.hasOwn(patch, "summary") ? patch.summary : current.summary;
+
+  withTransaction(() => {
+    db.prepare(`
+      UPDATE jobs
+      SET
+        status = ?,
+        error = ?,
+        summary = ?,
+        started_at = CASE
+          WHEN ? = 'running' AND started_at IS NULL THEN datetime('now')
+          ELSE started_at
+        END,
+        finished_at = CASE
+          WHEN ? IN ('done', 'failed', 'cancelled') THEN datetime('now')
+          ELSE finished_at
+        END,
+        updated_at = datetime('now')
+      WHERE id = ?
+    `).run(status, nextError, nextSummary, status, status, Number(id));
+
+    insertJobEvent(current.id, "job.status_changed", `Job status changed to ${status}.`, {
+      from: current.status,
+      to: status,
+      error: nextError,
+      summary: nextSummary
+    });
+  });
+
+  return getJob(id);
+}
+
+function insertJobEvent(jobId, type, message = "", data = {}) {
+  const normalizedData = normalizeJsonObject(data, "Job event data");
   const result = db.prepare(`
     INSERT INTO job_events (job_id, type, message, data)
     VALUES (?, ?, ?, ?)
-  `).run(Number(jobId), String(type || "job.event"), message || null, JSON.stringify(data || {}));
+  `).run(Number(jobId), String(type || "job.event"), message || null, JSON.stringify(normalizedData));
 
-  return db.prepare(`
+  const event = db.prepare(`
     SELECT
       id,
       job_id AS jobId,
@@ -279,46 +350,13 @@ export function recordJobEvent(jobId, type, message = "", data = {}) {
     FROM job_events
     WHERE id = ?
   `).get(result.lastInsertRowid);
+  return formatJobEvent(event);
 }
 
-export function updateJobStatus(id, status, { error = null, summary = null } = {}) {
-  if (!JOB_STATUSES.has(status)) {
-    throw new Error(`Invalid job status: ${status}`);
-  }
-
-  const current = getJob(id);
-  if (!current) {
-    throw new Error("Job not found.");
-  }
-
-  const startedAt = status === "running" && !current.startedAt ? new Date().toISOString() : current.startedAt;
-  const finishedAt = ["done", "failed", "cancelled"].includes(status) ? new Date().toISOString() : current.finishedAt;
-
-  db.prepare(`
-    UPDATE jobs
-    SET
-      status = ?,
-      error = ?,
-      summary = ?,
-      started_at = ?,
-      finished_at = ?,
-      updated_at = datetime('now')
-    WHERE id = ?
-  `).run(status, error, summary, startedAt, finishedAt, Number(id));
-
-  const job = getJob(id);
-  recordJobEvent(job.id, "job.status_changed", `Job status changed to ${status}.`, {
-    from: current.status,
-    to: status,
-    error,
-    summary
-  });
-  return job;
-}
-
-function normalizeJobInput({ goal, workspace, mode, status, policyLevel, timeoutMs }) {
+function normalizeJobInput({ goal, workspace, mode, status, requestedBy = "text", policyLevel, timeoutMs }) {
   const normalizedGoal = String(goal || "").trim();
   const normalizedWorkspace = String(workspace || "").trim();
+  const normalizedRequestedBy = String(requestedBy || "text");
 
   if (!normalizedGoal) {
     throw new Error("Job goal is required.");
@@ -336,6 +374,10 @@ function normalizeJobInput({ goal, workspace, mode, status, policyLevel, timeout
     throw new Error(`Invalid job status: ${status}`);
   }
 
+  if (!REQUEST_SOURCES.has(normalizedRequestedBy)) {
+    throw new Error(`Invalid job request source: ${requestedBy}`);
+  }
+
   if (!POLICY_LEVELS.has(policyLevel)) {
     throw new Error(`Invalid job policy level: ${policyLevel}`);
   }
@@ -350,9 +392,42 @@ function normalizeJobInput({ goal, workspace, mode, status, policyLevel, timeout
     workspace: normalizedWorkspace,
     mode,
     status,
+    requestedBy: normalizedRequestedBy,
     policyLevel,
     timeoutMs: parsedTimeout
   };
+}
+
+function assertJobTransition(from, to) {
+  if (from === to) {
+    return;
+  }
+
+  const allowed = JOB_STATUS_TRANSITIONS.get(from);
+  if (!allowed?.has(to)) {
+    const terminalHint = TERMINAL_JOB_STATUSES.has(from) ? " Terminal job statuses cannot transition." : "";
+    throw new Error(`Invalid job status transition: ${from} -> ${to}.${terminalHint}`);
+  }
+}
+
+function withTransaction(callback) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = callback();
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function normalizeJsonObject(value, label) {
+  const parsed = typeof value === "string" ? parseJson(value, null) : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  return parsed;
 }
 
 function jobSelectColumns() {

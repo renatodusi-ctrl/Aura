@@ -39,6 +39,8 @@ Append-only timeline entries for each job.
 
 - Jobs must exist before external CLIs run.
 - Status transitions should append `job_events`.
+- New jobs start as `draft`.
+- Terminal statuses `done`, `failed` and `cancelled` are final.
 - Future writers must use workspace locks before running.
 - Voice may create jobs, but must not confirm sensitive actions by itself.
 - CLI output persisted into job artifacts or events must be redacted before storage.
