@@ -115,6 +115,9 @@ function bindEvents() {
 
     const response = await api("/api/local/chat", { method: "POST", body: { text } });
     appendMessage("assistant", response.reply);
+    if (response.job?.id) {
+      state.selectedJobId = response.job.id;
+    }
     await refreshAll();
   });
 

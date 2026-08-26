@@ -26,6 +26,7 @@ import { cancelJobProcess } from "./supervisor.js";
 import { detectCodex, runCodexAsk, runCodexImplement } from "./codexAdapter.js";
 import { buildEvidenceBrief, runAnalysts } from "./analystAdapter.js";
 import { synthesizeDebate } from "./debateSynthesizer.js";
+import { handleVoiceIntent } from "./voiceIntents.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -457,6 +458,11 @@ function localChat(body) {
     return { reply: "Tarefa criada.", task };
   }
 
+  const voiceIntent = handleVoiceIntent(text);
+  if (voiceIntent) {
+    return voiceIntent;
+  }
+
   if (lower.includes("rotina") || lower.includes("bom dia")) {
     const tasks = listTasks(false);
     const openList = tasks.length ? tasks.map((task) => `- ${task.title}`).join("\n") : "Nenhuma tarefa aberta.";
@@ -464,7 +470,7 @@ function localChat(body) {
   }
 
   return {
-    reply: "Estou em modo local. Posso guardar memorias com \"guardar ...\", criar tarefas com \"tarefa ...\" e mostrar sua rotina enquanto a chave OpenAI nao estiver configurada."
+    reply: "Estou em modo local. Posso guardar memorias com \"guardar ...\", criar tarefas com \"tarefa ...\", criar jobs com \"criar job ...\", consultar com \"status do job 1\" e cancelar com \"cancelar job 1\"."
   };
 }
 
