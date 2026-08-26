@@ -17,6 +17,17 @@
 - Visible microphone permission states.
 - Push-to-talk and wake/listen modes.
 
+## Phase 1A - Agent Orchestration Kernel
+
+See `docs/AGENT_ORCHESTRATION_EVOLUTION.md`.
+
+- Persistent job store and timeline.
+- Workspace locks.
+- Central policy engine.
+- Process supervisor with timeout and cancellation.
+- Codex CLI adapter in read-only ask mode.
+- UI confirmation before write or Git actions.
+
 ## Phase 2 - Memory
 
 - Memory review inbox.
