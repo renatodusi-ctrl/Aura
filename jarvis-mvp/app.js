@@ -603,7 +603,7 @@ function renderActiveDemand() {
     ["summary", "Resumo", false],
     ["council", "Conselho", false],
     ["artifacts", "Artefatos", true],
-    ["events", "Eventos tecnicos", true]
+    ["events", "Eventos tecnicos", false]
   ];
   for (const [key, label, disabled] of tabItems) {
     const button = document.createElement("button");
@@ -651,7 +651,72 @@ function renderActiveDemand() {
     return;
   }
 
-  els.activeDemand.append(status, goal, meta, tabs, next, facts, action);
+  if (state.activeDemandTab === "events") {
+    const technical = document.createElement("div");
+    technical.className = "active-demand-technical";
+    const copy = document.createElement("p");
+    copy.textContent = state.selectedJobEvents.length
+      ? "Detalhe original da execucao, preservado para auditoria."
+      : "Sem eventos tecnicos registrados para esta demanda.";
+    const list = document.createElement("ul");
+    list.className = "job-events";
+    list.replaceChildren(...(state.selectedJobEvents.length ? state.selectedJobEvents.map(renderJobEvent) : []));
+    technical.append(copy, list);
+    els.activeDemand.append(status, goal, meta, tabs, technical, action);
+    return;
+  }
+
+  const alert = renderHumanFailure(job);
+  els.activeDemand.append(status, goal, meta, tabs);
+  if (alert) {
+    els.activeDemand.append(alert);
+  }
+  els.activeDemand.append(next, facts, action);
+}
+
+function renderHumanFailure(job) {
+  if (job.status !== "failed" || (!job.error && !job.summary)) {
+    return null;
+  }
+
+  const panel = document.createElement("p");
+  panel.className = "active-demand-alert";
+  const label = document.createElement("strong");
+  label.textContent = "Falha acionavel";
+  const copy = document.createElement("span");
+  copy.textContent = humanizeJobMessage(job.error || job.summary);
+  panel.append(label, copy);
+  return panel;
+}
+
+function humanizeJobMessage(value) {
+  const text = String(value || "").trim();
+  const lower = text.toLowerCase();
+  if (!text) {
+    return "";
+  }
+  if (lower.includes("codex cli was not found") || lower.includes("codex cli unavailable")) {
+    return "Codex CLI nao foi encontrado. Instale o Codex CLI ou configure AURA_CODEX_BIN e tente novamente.";
+  }
+  if (lower.includes("job cancelled before execution") || lower.includes("job cancelado")) {
+    return "Demanda cancelada antes da execucao. Nenhuma acao local foi realizada.";
+  }
+  if (lower.includes("gemini cli was not found")) {
+    return "Gemini CLI nao foi encontrado. Instale o Gemini CLI ou configure AURA_GEMINI_BIN antes de consultar este analista.";
+  }
+  if (lower.includes("grok cli was not found")) {
+    return "Grok CLI nao foi encontrado. Instale o Grok CLI ou configure AURA_GROK_BIN antes de consultar este analista.";
+  }
+  if (lower.includes("unavailable") || lower.includes("503")) {
+    return "O modelo ou provedor esta temporariamente indisponivel. Aguarde alguns instantes e tente novamente.";
+  }
+  if (lower.includes("fetch failed") || lower.includes("network")) {
+    return "Falha de rede ao consultar o provedor. Verifique a conexao e tente novamente.";
+  }
+  if (lower.includes("permission") || lower.includes("confirm")) {
+    return "A demanda precisa de permissao ou confirmacao antes de continuar. Revise o risco e aprove somente se fizer sentido.";
+  }
+  return text;
 }
 
 function renderJobDetail() {
@@ -749,19 +814,17 @@ function renderJobDetail() {
   if (job.summary) {
     const summary = document.createElement("p");
     summary.innerHTML = `<strong>Resumo</strong><span></span>`;
-    summary.querySelector("span").textContent = job.summary;
+    summary.querySelector("span").textContent = humanizeJobMessage(job.summary);
     notes.append(summary);
   }
   if (job.error) {
     const error = document.createElement("p");
     error.className = "error-text";
     error.innerHTML = `<strong>Erro</strong><span></span>`;
-    error.querySelector("span").textContent = job.error;
+    error.querySelector("span").textContent = humanizeJobMessage(job.error);
     notes.append(error);
   }
 
-  const eventTitle = document.createElement("h3");
-  eventTitle.textContent = "Eventos";
   const eventList = document.createElement("ul");
   eventList.className = "job-events";
   const events = state.selectedJobEvents.length ? state.selectedJobEvents : [];
@@ -773,6 +836,12 @@ function renderJobDetail() {
     empty.textContent = "Sem eventos.";
     eventList.append(empty);
   }
+
+  const technicalDetails = document.createElement("details");
+  technicalDetails.className = "technical-details";
+  const technicalSummary = document.createElement("summary");
+  technicalSummary.textContent = "Eventos tecnicos";
+  technicalDetails.append(technicalSummary, eventList);
 
   const artifactTitle = document.createElement("h3");
   artifactTitle.textContent = "Artefatos";
@@ -801,7 +870,7 @@ function renderJobDetail() {
   if (routineDraftControls) {
     els.jobDetail.append(routineDraftControls);
   }
-  els.jobDetail.append(notes, artifactTitle, artifactList, eventTitle, eventList);
+  els.jobDetail.append(notes, artifactTitle, artifactList, technicalDetails);
 }
 
 function renderJobEvent(event) {

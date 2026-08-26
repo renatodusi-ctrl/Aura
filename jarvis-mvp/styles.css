@@ -297,6 +297,30 @@ h2 {
   line-height: 1.45;
 }
 
+.active-demand-alert {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid rgba(239, 107, 107, .45);
+  border-radius: 6px;
+  background: rgba(239, 107, 107, .08);
+  line-height: 1.45;
+}
+
+.active-demand-alert strong {
+  color: var(--danger);
+}
+
+.active-demand-technical {
+  display: grid;
+  gap: 8px;
+}
+
+.active-demand-technical p {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .active-demand-next strong,
 .active-demand-facts dt {
   color: var(--muted);
@@ -907,6 +931,25 @@ video {
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.technical-details {
+  margin-top: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #11151b;
+}
+
+.technical-details summary {
+  min-height: 42px;
+  padding: 11px 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.technical-details .job-events {
+  margin: 0;
+  padding: 0 10px 10px;
 }
 
 .job-artifacts {
