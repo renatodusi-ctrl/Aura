@@ -8,6 +8,7 @@ const state = {
   selectedJobId: null,
   selectedJob: null,
   selectedJobEvents: [],
+  selectedJobArtifacts: [],
   events: [],
   routineEnabled: localStorage.getItem("aura.routineEnabled") === "true",
   screenStream: null,
@@ -177,6 +178,7 @@ async function loadSelectedJob() {
     state.selectedJobId = null;
     state.selectedJob = null;
     state.selectedJobEvents = [];
+    state.selectedJobArtifacts = [];
     return;
   }
 
@@ -187,6 +189,7 @@ async function loadSelectedJob() {
   const detail = await api(`/api/jobs/${state.selectedJobId}`);
   state.selectedJob = detail.job;
   state.selectedJobEvents = detail.events || [];
+  state.selectedJobArtifacts = detail.artifacts || [];
 }
 
 function renderStatus() {
@@ -339,6 +342,33 @@ function renderJobDetail() {
     actions.append(cancelButton);
   }
 
+  if (canConfirmImplementJob(job)) {
+    const runButton = document.createElement("button");
+    runButton.type = "button";
+    runButton.className = "primary";
+    runButton.textContent = "Executar";
+    runButton.addEventListener("click", async () => {
+      if (!confirm(`Executar job #${job.id} com permissao de escrita no workspace?`)) {
+        return;
+      }
+      let result = null;
+      try {
+        result = await api(`/api/jobs/${job.id}/codex/implement`, {
+          method: "POST",
+          body: { confirmed: true, prompt: job.goal }
+        });
+        state.selectedJob = result.job;
+        state.selectedJobEvents = result.events || [];
+        state.selectedJobArtifacts = result.artifacts || [];
+      } catch (error) {
+        appendMessage("system", `Implementacao nao concluida: ${error.message}`);
+      }
+      await refreshJobs();
+      logEvent("job.implement", { id: job.id, status: result?.job?.status || "failed" });
+    });
+    actions.append(runButton);
+  }
+
   header.append(titleGroup, actions);
 
   const facts = document.createElement("dl");
@@ -351,6 +381,7 @@ function renderJobDetail() {
   appendFact(facts, "Atualizado", formatDateTime(job.updatedAt));
   appendFact(facts, "Timeout", `${job.timeoutMs} ms`);
 
+  const approval = renderImplementationApproval(job);
   const notes = document.createElement("div");
   notes.className = "job-notes";
   if (job.summary) {
@@ -381,7 +412,25 @@ function renderJobDetail() {
     eventList.append(empty);
   }
 
-  els.jobDetail.append(header, facts, notes, eventTitle, eventList);
+  const artifactTitle = document.createElement("h3");
+  artifactTitle.textContent = "Artefatos";
+  const artifactList = document.createElement("ul");
+  artifactList.className = "job-artifacts";
+  const artifacts = state.selectedJobArtifacts.length ? state.selectedJobArtifacts : [];
+  artifactList.replaceChildren(...artifacts.map(renderJobArtifact));
+
+  if (!artifacts.length) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "Sem artefatos.";
+    artifactList.append(empty);
+  }
+
+  els.jobDetail.append(header, facts);
+  if (approval) {
+    els.jobDetail.append(approval);
+  }
+  els.jobDetail.append(notes, artifactTitle, artifactList, eventTitle, eventList);
 }
 
 function renderJobEvent(event) {
@@ -398,6 +447,46 @@ function renderJobEvent(event) {
   time.textContent = formatDateTime(event.createdAt);
 
   item.append(main, time);
+  return item;
+}
+
+function renderImplementationApproval(job) {
+  if (job.mode !== "implement") {
+    return null;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "approval-summary";
+  const metadata = job.metadata || {};
+  appendApprovalItem(panel, "Plano", metadata.plan || metadata.planSummary || job.goal);
+  appendApprovalItem(panel, "Risco", metadata.risk || riskForPolicy(job.policyLevel));
+  const likelyFiles = Array.isArray(metadata.likelyFiles) ? metadata.likelyFiles.join("\n") : metadata.likelyFiles;
+  appendApprovalItem(panel, "Arquivos provaveis", likelyFiles || "Nao informado");
+  return panel;
+}
+
+function appendApprovalItem(panel, label, value) {
+  const item = document.createElement("p");
+  const title = document.createElement("strong");
+  title.textContent = label;
+  const body = document.createElement("span");
+  body.textContent = value;
+  item.append(title, body);
+  panel.append(item);
+}
+
+function renderJobArtifact(artifact) {
+  const item = document.createElement("li");
+  const main = document.createElement("div");
+  const label = document.createElement("strong");
+  label.textContent = artifact.label;
+  const meta = document.createElement("small");
+  meta.textContent = artifact.kind;
+  main.append(label, meta);
+
+  const preview = document.createElement("pre");
+  preview.textContent = artifact.content || "";
+  item.append(main, preview);
   return item;
 }
 
@@ -419,6 +508,22 @@ function appendFact(list, label, value) {
 
 function canCancelJob(job) {
   return ["draft", "awaiting_confirm", "queued", "running", "needs_input"].includes(job.status);
+}
+
+function canConfirmImplementJob(job) {
+  return job.mode === "implement" && job.policyLevel === "write" && job.status === "awaiting_confirm";
+}
+
+function riskForPolicy(policyLevel) {
+  const risks = {
+    read: "Somente leitura.",
+    write: "Pode alterar arquivos no workspace.",
+    git: "Pode alterar estado Git local.",
+    network: "Pode acessar rede.",
+    secrets: "Bloqueado para dados sensiveis.",
+    destructive: "Bloqueado para acoes destrutivas."
+  };
+  return risks[policyLevel] || "Risco nao classificado.";
 }
 
 function labelForJobStatus(status) {

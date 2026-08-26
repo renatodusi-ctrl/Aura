@@ -328,7 +328,8 @@ video {
 }
 
 .job-list,
-.job-events {
+.job-events,
+.job-artifacts {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -342,7 +343,8 @@ video {
 }
 
 .job-list li.empty,
-.job-events li.empty {
+.job-events li.empty,
+.job-artifacts li.empty {
   min-height: 42px;
   padding: 10px;
   color: var(--muted);
@@ -467,7 +469,14 @@ video {
   margin-bottom: 14px;
 }
 
-.job-notes p {
+.approval-summary {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.job-notes p,
+.approval-summary p {
   display: grid;
   gap: 4px;
   padding: 10px;
@@ -476,12 +485,15 @@ video {
   background: #11151b;
 }
 
-.job-notes strong {
+.job-notes strong,
+.approval-summary strong {
   color: var(--muted);
 }
 
-.job-notes span {
+.job-notes span,
+.approval-summary span {
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .error-text span {
@@ -525,6 +537,43 @@ video {
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.job-artifacts {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  margin: 10px 0 14px;
+  overflow: auto;
+}
+
+.job-artifacts li {
+  display: grid;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #11151b;
+}
+
+.job-artifacts div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.job-artifacts small {
+  color: var(--muted);
+}
+
+.job-artifacts pre {
+  max-height: 160px;
+  margin: 0;
+  overflow: auto;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .empty-state {

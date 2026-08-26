@@ -88,9 +88,21 @@ export function initMemory() {
       FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS job_artifacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      label TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
     CREATE INDEX IF NOT EXISTS idx_jobs_workspace ON jobs(workspace);
     CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id, id);
+    CREATE INDEX IF NOT EXISTS idx_job_artifacts_job_id ON job_artifacts(job_id, id);
   `);
 }
 
@@ -305,6 +317,62 @@ export function recordJobEvent(jobId, type, message = "", data = {}) {
   return insertJobEvent(jobId, type, message, data);
 }
 
+export function createJobArtifact(jobId, { kind, label, content = "", metadata = {} }) {
+  const job = getJob(jobId);
+  if (!job) {
+    throw new Error("Job not found.");
+  }
+
+  const normalizedMetadata = redactObject(normalizeJsonObject(metadata, "Job artifact metadata"));
+  const result = db.prepare(`
+    INSERT INTO job_artifacts (job_id, kind, label, content, metadata)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    Number(jobId),
+    String(kind || "artifact"),
+    redactText(String(label || kind || "Artifact")),
+    redactText(String(content || "")),
+    JSON.stringify(normalizedMetadata)
+  );
+
+  const artifact = db.prepare(`
+    SELECT
+      id,
+      job_id AS jobId,
+      kind,
+      label,
+      content,
+      metadata,
+      created_at AS createdAt
+    FROM job_artifacts
+    WHERE id = ?
+  `).get(result.lastInsertRowid);
+
+  insertJobEvent(jobId, "job.artifact_created", `Artifact created: ${artifact.label}.`, {
+    artifactId: artifact.id,
+    kind: artifact.kind,
+    label: artifact.label
+  });
+
+  return formatJobArtifact(artifact);
+}
+
+export function listJobArtifacts(jobId) {
+  return db.prepare(`
+    SELECT
+      id,
+      job_id AS jobId,
+      kind,
+      label,
+      content,
+      metadata,
+      created_at AS createdAt
+    FROM job_artifacts
+    WHERE job_id = ?
+    ORDER BY id ASC
+  `).all(Number(jobId)).map(formatJobArtifact);
+}
+
 export function updateJobStatus(id, status, patch = {}) {
   if (!JOB_STATUSES.has(status)) {
     throw new Error(`Invalid job status: ${status}`);
@@ -501,6 +569,13 @@ function formatJobEvent(event) {
   return {
     ...event,
     data: parseJson(event.data, {})
+  };
+}
+
+function formatJobArtifact(artifact) {
+  return {
+    ...artifact,
+    metadata: parseJson(artifact.metadata, {})
   };
 }
 

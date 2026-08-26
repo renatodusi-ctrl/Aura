@@ -19,7 +19,18 @@ for (const pattern of [
   assert.match(app, pattern);
 }
 
-for (const token of ["workspace", "mode", "policyLevel", "selectedJobEvents", "canCancelJob"]) {
+for (const token of [
+  "workspace",
+  "mode",
+  "policyLevel",
+  "selectedJobEvents",
+  "selectedJobArtifacts",
+  "canCancelJob",
+  "canConfirmImplementJob",
+  "codex/implement",
+  "renderJobArtifact",
+  "renderImplementationApproval"
+]) {
   assert.match(app, new RegExp(token), `Missing jobs UI token: ${token}`);
 }
 

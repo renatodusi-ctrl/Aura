@@ -14,6 +14,7 @@ import {
   deleteTask,
   createJob,
   getJob,
+  listJobArtifacts,
   listJobEvents,
   listJobs,
   updateJobStatus
@@ -22,7 +23,7 @@ import { getLocalContext, listTools, runTool } from "./tools.js";
 import { evaluateJobPolicy, normalizePolicyLevel, POLICY_LEVELS } from "./policy.js";
 import { createSessionToken, isAllowedOrigin, isProtectedApiPath, validateSessionRequest } from "./httpSecurity.js";
 import { cancelJobProcess } from "./supervisor.js";
-import { detectCodex, runCodexAsk } from "./codexAdapter.js";
+import { detectCodex, runCodexAsk, runCodexImplement } from "./codexAdapter.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -105,7 +106,7 @@ async function route(req, res) {
     if (!job) {
       return sendJson(res, 404, { error: "Job not found." });
     }
-    return sendJson(res, 200, { job, events: listJobEvents(job.id) });
+    return sendJson(res, 200, { job, events: listJobEvents(job.id), artifacts: listJobArtifacts(job.id) });
   }
 
   if (jobRoute && method === "GET" && jobRoute.action === "events") {
@@ -122,6 +123,10 @@ async function route(req, res) {
 
   if (jobRoute && method === "POST" && jobRoute.action === "codex/ask") {
     return codexAskRoute(jobRoute.id, req, res);
+  }
+
+  if (jobRoute && method === "POST" && jobRoute.action === "codex/implement") {
+    return codexImplementRoute(jobRoute.id, req, res);
   }
 
   if (url.pathname === "/api/memories" && method === "GET") {
@@ -263,6 +268,23 @@ async function codexAskRoute(id, req, res) {
   }
 }
 
+async function codexImplementRoute(id, req, res) {
+  try {
+    const body = await readJson(req);
+    const output = await runCodexImplement({
+      jobId: id,
+      prompt: body.prompt,
+      confirmed: body.confirmed === true,
+      bin: body.bin,
+      timeoutMs: body.timeoutMs,
+      testCommand: body.testCommand
+    });
+    return sendJson(res, output.job.status === "failed" ? 503 : 200, output);
+  } catch (error) {
+    return sendJson(res, 400, { error: error.message || "Could not run Codex implement." });
+  }
+}
+
 function resolveWorkspace(workspace = ROOT_DIR) {
   const resolved = path.resolve(String(workspace || ROOT_DIR));
   let stat;
@@ -308,7 +330,7 @@ function policyLevelForJobMode(mode, policyLevel) {
 }
 
 function matchJobRoute(pathname) {
-  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|codex\/ask))?$/);
+  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|codex\/ask|codex\/implement))?$/);
   if (!match) {
     return null;
   }

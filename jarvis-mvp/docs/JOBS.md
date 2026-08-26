@@ -35,10 +35,25 @@ Append-only timeline entries for each job.
 | `data` | JSON event payload. |
 | `created_at` | Event timestamp. |
 
+### `job_artifacts`
+
+Persisted outputs attached to one job.
+
+| Column | Purpose |
+| --- | --- |
+| `id` | Local artifact identifier. |
+| `job_id` | Parent job. |
+| `kind` | Artifact class such as `diff`, `test-log`, `codex-log` or `changed-files`. |
+| `label` | User-facing artifact name. |
+| `content` | Redacted artifact body. |
+| `metadata` | JSON metadata such as command, args, exit code or file list. |
+| `created_at` | Artifact timestamp. |
+
 ## Rules
 
 - Jobs must exist before external CLIs run.
 - Status transitions should append `job_events`.
+- Artifacts should be persisted for diffs, test logs and generated executor summaries.
 - New jobs start as `draft`.
 - Terminal statuses `done`, `failed` and `cancelled` are final.
 - `write` and `git` jobs lock their workspace until they reach `done`, `failed` or `cancelled`.
@@ -55,7 +70,7 @@ The job API is orchestration-only. It does not execute external CLIs.
 | --- | --- |
 | `GET /api/jobs?limit=50` | List recent jobs. |
 | `POST /api/jobs` | Create a draft job. |
-| `GET /api/jobs/:id` | Read one job with its events. |
+| `GET /api/jobs/:id` | Read one job with its events and artifacts. |
 | `GET /api/jobs/:id/events` | Read a job timeline. |
 | `POST /api/jobs/:id/cancel` | Cancel a non-terminal job. |
 
@@ -63,7 +78,10 @@ When a `write` or `git` job already exists in a non-terminal state for a workspa
 
 Process execution is owned by `server/supervisor.js`. The supervisor records process start, stdout, stderr, timeout, cancellation and finish events on the parent job.
 
-Codex read-only ask execution is owned by `server/codexAdapter.js`. It only accepts `mode=ask` and `policy_level=read` jobs, runs `codex exec` with `--sandbox read-only`, and records detection, stdout, stderr, exit status and final message on the job timeline.
+Codex execution is owned by `server/codexAdapter.js`.
+
+- `ask` accepts `mode=ask` and `policy_level=read`, runs `codex exec` with `--sandbox read-only`, and records detection, stdout, stderr, exit status and final message on the job timeline.
+- `implement` accepts only `mode=implement`, `policy_level=write`, `status=awaiting_confirm` and an explicit confirmation payload. It runs `codex exec` with `--sandbox workspace-write`, blocks push/reset/destructive intent, and persists diff, changed files, Codex logs, final message and optional test logs as artifacts.
 
 Create payload:
 

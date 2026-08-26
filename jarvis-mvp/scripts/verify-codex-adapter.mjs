@@ -3,9 +3,10 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { config } from "../server/config.js";
 import { createJob, getJob, initMemory, listJobEvents, updateJobStatus } from "../server/memory.js";
-import { detectCodex, runCodexAsk } from "../server/codexAdapter.js";
+import { detectCodex, runCodexAsk, runCodexImplement } from "../server/codexAdapter.js";
 
 initMemory();
 
@@ -93,6 +94,76 @@ try {
     /Codex ask cannot run while job status is cancelled/
   );
 
+  const implementWorkspace = createGitWorkspace();
+  const implementJob = createJob({
+    goal: "Verify fake Codex implement",
+    workspace: implementWorkspace,
+    mode: "implement",
+    policyLevel: "write",
+    requiresConfirmation: true,
+    timeoutMs: 5000,
+    metadata: {
+      plan: "Append one line to README.",
+      risk: "Low write risk in a temporary workspace.",
+      likelyFiles: ["README.md"]
+    }
+  });
+  jobIds.push(implementJob.id);
+  updateJobStatus(implementJob.id, "awaiting_confirm", { summary: "Write jobs require visual confirmation before execution." });
+  const fakeImplement = await runCodexImplement({
+    jobId: implementJob.id,
+    prompt: "Append one line to README.",
+    confirmed: true,
+    bin: fakeCodex,
+    timeoutMs: 5000,
+    testCommand: {
+      command: process.execPath,
+      args: ["-e", "console.log('tests ok')"],
+      timeoutMs: 5000
+    }
+  });
+  assert.equal(fakeImplement.result.exitCode, 0);
+  assert.equal(fakeImplement.job.status, "done");
+  assert.ok(fakeImplement.result.changedFiles.includes("README.md"));
+  assert.match(fakeImplement.job.summary, /Changed files: README\.md/);
+  assert.ok(fakeImplement.artifacts.some((artifact) => artifact.kind === "diff" && artifact.content.includes("fake implement change")));
+  assert.ok(fakeImplement.artifacts.some((artifact) => artifact.kind === "test-log" && artifact.content.includes("tests ok")));
+  assert.ok(fakeImplement.artifacts.some((artifact) => artifact.kind === "codex-summary"));
+  const implementEvents = listJobEvents(implementJob.id).map((event) => event.type);
+  assert.ok(implementEvents.includes("codex.implement.started"));
+  assert.ok(implementEvents.includes("codex.implement.finished"));
+
+  const unconfirmedJob = createJob({
+    goal: "Verify implement confirmation gate",
+    workspace: implementWorkspace,
+    mode: "implement",
+    policyLevel: "write",
+    requiresConfirmation: true,
+    timeoutMs: 1000
+  });
+  jobIds.push(unconfirmedJob.id);
+  updateJobStatus(unconfirmedJob.id, "awaiting_confirm", { summary: "Needs confirmation." });
+  await assert.rejects(
+    () => runCodexImplement({ jobId: unconfirmedJob.id, confirmed: false, bin: fakeCodex }),
+    /explicit visual confirmation/
+  );
+  updateJobStatus(unconfirmedJob.id, "cancelled", { summary: "Release confirmation gate fixture." });
+
+  const blockedJob = createJob({
+    goal: "Run git push after edits",
+    workspace: implementWorkspace,
+    mode: "implement",
+    policyLevel: "write",
+    requiresConfirmation: true,
+    timeoutMs: 1000
+  });
+  jobIds.push(blockedJob.id);
+  updateJobStatus(blockedJob.id, "awaiting_confirm", { summary: "Needs confirmation." });
+  await assert.rejects(
+    () => runCodexImplement({ jobId: blockedJob.id, confirmed: true, bin: fakeCodex }),
+    /Blocked command/
+  );
+
   if (detected.available && process.env.AURA_VERIFY_CODEX_REAL === "1") {
     const askJob = createJob({
       goal: "Say exactly: AURA-CODEX-VERIFY",
@@ -135,6 +206,8 @@ function createFakeCodex() {
     fs.writeFileSync(scriptPath, [
       "@echo off",
       "if \"%1\"==\"--version\" echo codex-cli fake& exit /b 0",
+      "echo %* | findstr /C:\"workspace-write\" >nul",
+      "if not errorlevel 1 echo fake implement change>>README.md",
       "echo %*",
       ":loop",
       "if \"%1\"==\"--output-last-message\" (",
@@ -152,6 +225,15 @@ function createFakeCodex() {
       "  echo 'codex-cli fake'",
       "  exit 0",
       "fi",
+      "write_file=0",
+      "for arg in \"$@\"; do",
+      "  if [ \"$arg\" = \"workspace-write\" ]; then",
+      "    write_file=1",
+      "  fi",
+      "done",
+      "if [ \"$write_file\" = \"1\" ]; then",
+      "  printf 'fake implement change\\n' >> README.md",
+      "fi",
       "printf '%s ' \"$@\"",
       "printf '\\n'",
       "while [ \"$#\" -gt 0 ]; do",
@@ -167,4 +249,13 @@ function createFakeCodex() {
   }
 
   return scriptPath;
+}
+
+function createGitWorkspace() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aura-codex-workspace-"));
+  tempDirs.push(dir);
+  fs.writeFileSync(path.join(dir, "README.md"), "AURA temp workspace\n");
+  spawnSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+  spawnSync("git", ["add", "README.md"], { cwd: dir, stdio: "ignore" });
+  return dir;
 }
