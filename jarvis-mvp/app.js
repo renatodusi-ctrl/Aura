@@ -382,6 +382,7 @@ function renderJobDetail() {
   appendFact(facts, "Timeout", `${job.timeoutMs} ms`);
 
   const approval = renderImplementationApproval(job);
+  const analystConsent = renderAnalystConsent(job);
   const notes = document.createElement("div");
   notes.className = "job-notes";
   if (job.summary) {
@@ -430,6 +431,9 @@ function renderJobDetail() {
   if (approval) {
     els.jobDetail.append(approval);
   }
+  if (analystConsent) {
+    els.jobDetail.append(analystConsent);
+  }
   els.jobDetail.append(notes, artifactTitle, artifactList, eventTitle, eventList);
 }
 
@@ -465,6 +469,58 @@ function renderImplementationApproval(job) {
   return panel;
 }
 
+function renderAnalystConsent(job) {
+  if (!canRunAnalystsJob(job)) {
+    return null;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "analyst-consent";
+
+  const preview = document.createElement("pre");
+  preview.textContent = buildAnalystPreview(job);
+
+  const controls = document.createElement("div");
+  controls.className = "analyst-controls";
+  const gemini = checkboxControl(`analyst-gemini-${job.id}`, "Gemini", true);
+  const grok = checkboxControl(`analyst-grok-${job.id}`, "Grok", true);
+  const runButton = document.createElement("button");
+  runButton.type = "button";
+  runButton.className = "primary";
+  runButton.textContent = "Consultar";
+  runButton.addEventListener("click", async () => {
+    const consent = {
+      gemini: gemini.input.checked,
+      grok: grok.input.checked
+    };
+    if (!consent.gemini && !consent.grok) {
+      appendMessage("system", "Selecione ao menos um analista.");
+      return;
+    }
+    let result = null;
+    try {
+      result = await api(`/api/jobs/${job.id}/analysts/run`, {
+        method: "POST",
+        body: {
+          consent,
+          context: analystContext(job)
+        }
+      });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      state.selectedJobArtifacts = result.artifacts || [];
+    } catch (error) {
+      appendMessage("system", `Analise nao concluida: ${error.message}`);
+    }
+    await refreshJobs();
+    logEvent("job.analysts", { id: job.id, status: result?.job?.status || "failed", consent });
+  });
+
+  controls.append(gemini.label, grok.label, runButton);
+  panel.append(preview, controls);
+  return panel;
+}
+
 function appendApprovalItem(panel, label, value) {
   const item = document.createElement("p");
   const title = document.createElement("strong");
@@ -473,6 +529,19 @@ function appendApprovalItem(panel, label, value) {
   body.textContent = value;
   item.append(title, body);
   panel.append(item);
+}
+
+function checkboxControl(id, text, checked) {
+  const label = document.createElement("label");
+  label.className = "checkbox-control";
+  const input = document.createElement("input");
+  input.id = id;
+  input.type = "checkbox";
+  input.checked = checked;
+  const span = document.createElement("span");
+  span.textContent = text;
+  label.append(input, span);
+  return { label, input };
 }
 
 function renderJobArtifact(artifact) {
@@ -512,6 +581,38 @@ function canCancelJob(job) {
 
 function canConfirmImplementJob(job) {
   return job.mode === "implement" && job.policyLevel === "write" && job.status === "awaiting_confirm";
+}
+
+function canRunAnalystsJob(job) {
+  return job.mode === "analyze" && job.policyLevel === "read" && ["draft", "queued"].includes(job.status);
+}
+
+function analystContext(job) {
+  const metadata = job.metadata || {};
+  return {
+    constraints: metadata.constraints,
+    files: metadata.files || metadata.likelyFiles,
+    findings: metadata.findings,
+    attempted: metadata.attempted
+  };
+}
+
+function buildAnalystPreview(job) {
+  const context = analystContext(job);
+  const lines = [
+    "AURA Evidence Brief",
+    `Objective: ${job.goal}`,
+    `Workspace: ${job.workspace}`,
+    `Mode: ${job.mode}`,
+    `Policy: ${job.policyLevel}`,
+    "Destinations: Gemini, Grok",
+    "Constraints: read-only, plan mode, no file edits, no Git commands"
+  ];
+  const files = Array.isArray(context.files) ? context.files : [];
+  if (files.length) {
+    lines.push(`Files: ${files.join(", ")}`);
+  }
+  return lines.join("\n");
 }
 
 function riskForPolicy(policyLevel) {

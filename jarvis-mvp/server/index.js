@@ -24,6 +24,7 @@ import { evaluateJobPolicy, normalizePolicyLevel, POLICY_LEVELS } from "./policy
 import { createSessionToken, isAllowedOrigin, isProtectedApiPath, validateSessionRequest } from "./httpSecurity.js";
 import { cancelJobProcess } from "./supervisor.js";
 import { detectCodex, runCodexAsk, runCodexImplement } from "./codexAdapter.js";
+import { buildEvidenceBrief, runAnalysts } from "./analystAdapter.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -127,6 +128,14 @@ async function route(req, res) {
 
   if (jobRoute && method === "POST" && jobRoute.action === "codex/implement") {
     return codexImplementRoute(jobRoute.id, req, res);
+  }
+
+  if (jobRoute && method === "POST" && jobRoute.action === "analysts/preview") {
+    return analystPreviewRoute(jobRoute.id, req, res);
+  }
+
+  if (jobRoute && method === "POST" && jobRoute.action === "analysts/run") {
+    return analystsRunRoute(jobRoute.id, req, res);
   }
 
   if (url.pathname === "/api/memories" && method === "GET") {
@@ -285,6 +294,35 @@ async function codexImplementRoute(id, req, res) {
   }
 }
 
+async function analystPreviewRoute(id, req, res) {
+  try {
+    const job = getJob(id);
+    if (!job) {
+      return sendJson(res, 404, { error: "Job not found." });
+    }
+    const body = await readJson(req);
+    return sendJson(res, 200, { brief: buildEvidenceBrief(job, body.context || {}) });
+  } catch (error) {
+    return sendJson(res, 400, { error: error.message || "Could not build analyst preview." });
+  }
+}
+
+async function analystsRunRoute(id, req, res) {
+  try {
+    const body = await readJson(req);
+    const output = await runAnalysts({
+      jobId: id,
+      context: body.context || {},
+      consent: body.consent || {},
+      bins: body.bins || {},
+      timeoutMs: body.timeoutMs
+    });
+    return sendJson(res, output.job.status === "failed" ? 503 : 200, output);
+  } catch (error) {
+    return sendJson(res, 400, { error: error.message || "Could not run analysts." });
+  }
+}
+
 function resolveWorkspace(workspace = ROOT_DIR) {
   const resolved = path.resolve(String(workspace || ROOT_DIR));
   let stat;
@@ -330,7 +368,7 @@ function policyLevelForJobMode(mode, policyLevel) {
 }
 
 function matchJobRoute(pathname) {
-  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|codex\/ask|codex\/implement))?$/);
+  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|codex\/ask|codex\/implement|analysts\/preview|analysts\/run))?$/);
   if (!match) {
     return null;
   }

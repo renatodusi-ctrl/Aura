@@ -475,6 +475,47 @@ video {
   margin-bottom: 14px;
 }
 
+.analyst-consent {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #11151b;
+}
+
+.analyst-consent pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.analyst-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.checkbox-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  color: var(--text);
+}
+
+.checkbox-control input {
+  min-width: 18px;
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+}
+
 .job-notes p,
 .approval-summary p {
   display: grid;

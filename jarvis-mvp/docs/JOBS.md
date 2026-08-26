@@ -73,6 +73,8 @@ The job API is orchestration-only. It does not execute external CLIs.
 | `GET /api/jobs/:id` | Read one job with its events and artifacts. |
 | `GET /api/jobs/:id/events` | Read a job timeline. |
 | `POST /api/jobs/:id/cancel` | Cancel a non-terminal job. |
+| `POST /api/jobs/:id/analysts/preview` | Preview the shared evidence brief for an analyze job. |
+| `POST /api/jobs/:id/analysts/run` | Run approved Gemini/Grok read-only analysts. |
 
 When a `write` or `git` job already exists in a non-terminal state for a workspace, creating another `write` or `git` job in that same workspace returns `409` with a `lockedBy` summary.
 
@@ -82,6 +84,8 @@ Codex execution is owned by `server/codexAdapter.js`.
 
 - `ask` accepts `mode=ask` and `policy_level=read`, runs `codex exec` with `--sandbox read-only`, and records detection, stdout, stderr, exit status and final message on the job timeline.
 - `implement` accepts only `mode=implement`, `policy_level=write`, `status=awaiting_confirm` and an explicit confirmation payload. It runs `codex exec` with `--sandbox workspace-write`, blocks push/reset/destructive intent, and persists diff, changed files, Codex logs, final message and optional test logs as artifacts.
+
+Gemini and Grok analyst execution is owned by `server/analystAdapter.js`. It accepts only `mode=analyze` and `policy_level=read` jobs, requires destination consent, sends the same evidence brief to each selected analyst in plan/read-only mode, and normalizes responses into `findings`, `risks`, `open_questions`, `recommendation` and `confidence`.
 
 Create payload:
 

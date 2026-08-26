@@ -29,7 +29,12 @@ for (const token of [
   "canConfirmImplementJob",
   "codex/implement",
   "renderJobArtifact",
-  "renderImplementationApproval"
+  "renderImplementationApproval",
+  "analysts/run",
+  "renderAnalystConsent",
+  "buildAnalystPreview",
+  "Gemini",
+  "Grok"
 ]) {
   assert.match(app, new RegExp(token), `Missing jobs UI token: ${token}`);
 }
