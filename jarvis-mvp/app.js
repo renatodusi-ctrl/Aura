@@ -104,12 +104,12 @@ function bindEvents() {
     }
 
     try {
-      appendMessage("system", "Conectando voz em tempo real...");
+      appendMessage("system", "Vou abrir o microfone e conectar a voz ao vivo.");
       await state.realtime.connect();
       els.voiceButton.dataset.connected = "true";
       els.voiceButton.textContent = "Desconectar voz";
     } catch (error) {
-      appendMessage("system", `Voz real indisponivel: ${error.message}`);
+      appendMessage("system", `Nao consegui abrir a voz ao vivo: ${error.message}. Podemos continuar por texto local.`);
       setVoiceStatus("fallback");
     }
   });
@@ -602,7 +602,7 @@ function renderActiveDemand() {
   const tabItems = [
     ["summary", "Resumo", false],
     ["council", "Conselho", false],
-    ["artifacts", "Artefatos", true],
+    ["artifacts", "Artefatos", false],
     ["events", "Eventos tecnicos", false]
   ];
   for (const [key, label, disabled] of tabItems) {
@@ -663,6 +663,21 @@ function renderActiveDemand() {
     list.replaceChildren(...(state.selectedJobEvents.length ? state.selectedJobEvents.map(renderJobEvent) : []));
     technical.append(copy, list);
     els.activeDemand.append(status, goal, meta, tabs, technical, action);
+    return;
+  }
+
+  if (state.activeDemandTab === "artifacts") {
+    const panel = document.createElement("div");
+    panel.className = "artifact-cards";
+    if (state.selectedJobArtifacts.length) {
+      panel.replaceChildren(...state.selectedJobArtifacts.map(renderArtifactCard));
+    } else {
+      const empty = document.createElement("p");
+      empty.className = "empty-state";
+      empty.textContent = "Sem artefatos para esta demanda ainda.";
+      panel.append(empty);
+    }
+    els.activeDemand.append(status, goal, meta, tabs, panel, action);
     return;
   }
 
@@ -1226,6 +1241,58 @@ function renderJobArtifact(artifact) {
   return item;
 }
 
+function renderArtifactCard(artifact) {
+  const card = document.createElement("article");
+  card.className = "artifact-card";
+
+  const header = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = artifact.label;
+  const meta = document.createElement("small");
+  meta.textContent = artifact.kind;
+  header.append(title, meta);
+
+  const preview = document.createElement("p");
+  preview.textContent = artifact.content || "Artefato sem conteudo textual.";
+
+  const actions = document.createElement("div");
+  actions.className = "artifact-actions";
+
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.textContent = "Copiar";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(artifact.content || "");
+      appendMessage("system", "Artefato copiado.");
+    } catch {
+      els.localInput.value = artifact.content || "";
+      appendMessage("system", "Nao consegui copiar automaticamente; deixei o artefato na conversa.");
+    }
+  });
+
+  const use = document.createElement("button");
+  use.type = "button";
+  use.className = "primary";
+  use.textContent = "Usar na conversa";
+  use.addEventListener("click", () => {
+    els.localInput.value = artifact.content || artifact.label;
+    els.localInput.focus();
+  });
+
+  const details = document.createElement("button");
+  details.type = "button";
+  details.textContent = "Ver detalhes";
+  details.addEventListener("click", () => {
+    document.querySelector(".jobs-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+    els.jobDetail.focus?.();
+  });
+
+  actions.append(details, copy, use);
+  card.append(header, preview, actions);
+  return card;
+}
+
 function renderTools() {
   els.toolsList.replaceChildren(...state.status.tools.map((tool) => {
     const item = document.createElement("li");
@@ -1356,15 +1423,15 @@ function formatDateTime(value) {
 function renderRoutine() {
   els.routinePanel.replaceChildren();
   if (!state.routineEnabled) {
-    els.routinePanel.textContent = "Rotina pausada.";
+    els.routinePanel.textContent = "Rotina pausada. Ative quando quiser que AURA sugira proximos passos enquanto o cockpit estiver aberto.";
     return;
   }
 
   const tasks = state.tasks.filter((task) => task.status !== "done");
   const summary = document.createElement("p");
   summary.textContent = tasks.length
-    ? `Hoje: ${tasks.map((task) => task.title).join(" · ")}`
-    : "Rotina ativa. Nenhuma tarefa aberta agora.";
+    ? `Sugestao do dia baseada nas tarefas abertas: ${tasks.map((task) => task.title).join(" · ")}`
+    : "Rotina ativa. AURA pode sugerir uma demanda para organizar os proximos passos do dia.";
 
   const form = document.createElement("form");
   form.className = "routine-job-form";
@@ -1384,7 +1451,7 @@ function renderRoutine() {
 
   const button = document.createElement("button");
   button.type = "submit";
-  button.textContent = "Sugerir";
+  button.textContent = "Criar demanda";
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1431,13 +1498,13 @@ function stopScreenCapture() {
 
 function setVoiceStatus(status) {
   const labels = {
-    idle: "Voz parada",
-    fallback: "Fallback local",
-    "requesting-token": "Pedindo token",
-    "requesting-microphone": "Pedindo microfone",
-    negotiating: "Negociando WebRTC",
-    connected: "Voz conectada",
-    closed: "Voz encerrada"
+    idle: "AURA esta pronta para conversar por texto.",
+    fallback: "Voz ao vivo indisponivel; continuo com voce por texto local.",
+    "requesting-token": "Estou preparando uma sessao segura de voz.",
+    "requesting-microphone": "O navegador vai pedir acesso ao microfone.",
+    negotiating: "Estou conectando o canal de voz ao vivo.",
+    connected: "Voz ao vivo conectada. Pode falar comigo.",
+    closed: "Voz encerrada. Continuo disponivel por texto."
   };
   appendMessage("system", labels[status] || status);
   if (status === "idle" || status === "closed" || status === "fallback") {

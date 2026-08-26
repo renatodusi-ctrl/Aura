@@ -321,6 +321,46 @@ h2 {
   line-height: 1.45;
 }
 
+.artifact-cards {
+  display: grid;
+  gap: 10px;
+}
+
+.artifact-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #11151b;
+}
+
+.artifact-card div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.artifact-card small,
+.artifact-card p {
+  color: var(--muted);
+}
+
+.artifact-card p {
+  max-height: 110px;
+  overflow: auto;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .demand-timeline {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
