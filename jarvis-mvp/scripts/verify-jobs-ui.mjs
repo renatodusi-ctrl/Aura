@@ -38,7 +38,12 @@ for (const token of [
   "debate/synthesize",
   "renderDebateControls",
   "canSynthesizeDebate",
-  "Sintetizar"
+  "Sintetizar",
+  "/api/routine/jobs",
+  "renderRoutineDraftControls",
+  "routine.job.created",
+  "Aprovar",
+  "Descartar"
 ]) {
   assert.match(app, new RegExp(token), `Missing jobs UI token: ${token}`);
 }

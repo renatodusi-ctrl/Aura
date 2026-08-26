@@ -73,6 +73,9 @@ The job API is orchestration-only. It does not execute external CLIs.
 | `GET /api/jobs/:id` | Read one job with its events and artifacts. |
 | `GET /api/jobs/:id/events` | Read a job timeline. |
 | `POST /api/jobs/:id/cancel` | Cancel a non-terminal job. |
+| `PATCH /api/jobs/:id` | Edit a draft job. |
+| `POST /api/jobs/:id/approve` | Approve a draft into `queued` without execution. |
+| `POST /api/routine/jobs` | Create a routine-owned `ask` or `analyze` draft. |
 | `POST /api/jobs/:id/analysts/preview` | Preview the shared evidence brief for an analyze job. |
 | `POST /api/jobs/:id/analysts/run` | Run approved Gemini/Grok read-only analysts. |
 | `POST /api/jobs/:id/debate/synthesize` | Persist consensus, dissent, risks and unverified items from analyst artifacts. |
@@ -89,6 +92,8 @@ Codex execution is owned by `server/codexAdapter.js`.
 Gemini and Grok analyst execution is owned by `server/analystAdapter.js`. It accepts only `mode=analyze` and `policy_level=read` jobs, requires destination consent, sends the same evidence brief to each selected analyst in plan/read-only mode, and normalizes responses into `findings`, `risks`, `open_questions`, `recommendation` and `confidence`.
 
 Debate synthesis is owned by `server/debateSynthesizer.js`. It reads normalized analyst artifacts, separates consensus from dissent and unverified items, caps rounds by budget, requires explicit request or policy allowance, and marks later implementation as requiring a short plan plus confirmation.
+
+Routine draft suggestions are owned by `/api/routine/jobs`. They can create only `ask` or `analyze` jobs with `requested_by=routine`, `policy_level=read` and `status=draft`. Users can edit, approve into `queued`, or discard these drafts. Routine never starts implementation.
 
 Create payload:
 

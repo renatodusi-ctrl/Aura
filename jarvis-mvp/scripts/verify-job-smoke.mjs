@@ -103,6 +103,52 @@ try {
   assert.equal(cancelledDetail.status, 200);
   assert.equal(cancelledDetail.data.job.status, "cancelled");
 
+  const routineDraft = await request("/api/routine/jobs", {
+    method: "POST",
+    headers,
+    body: {
+      goal: "Smoke routine draft",
+      workspace: root,
+      mode: "analyze"
+    }
+  });
+  assert.equal(routineDraft.status, 201);
+  assert.equal(routineDraft.data.job.requestedBy, "routine");
+  assert.equal(routineDraft.data.job.mode, "analyze");
+  assert.equal(routineDraft.data.job.policyLevel, "read");
+  assert.equal(routineDraft.data.job.status, "draft");
+  jobIds.push(routineDraft.data.job.id);
+
+  const editedRoutineDraft = await request(`/api/jobs/${routineDraft.data.job.id}`, {
+    method: "PATCH",
+    headers,
+    body: {
+      goal: "Smoke edited routine draft",
+      mode: "ask"
+    }
+  });
+  assert.equal(editedRoutineDraft.status, 200);
+  assert.equal(editedRoutineDraft.data.job.goal, "Smoke edited routine draft");
+  assert.equal(editedRoutineDraft.data.job.mode, "ask");
+
+  const approvedRoutineDraft = await request(`/api/jobs/${routineDraft.data.job.id}/approve`, {
+    method: "POST",
+    headers
+  });
+  assert.equal(approvedRoutineDraft.status, 200);
+  assert.equal(approvedRoutineDraft.data.job.status, "queued");
+
+  const blockedRoutineImplement = await request("/api/routine/jobs", {
+    method: "POST",
+    headers,
+    body: {
+      goal: "Smoke blocked routine implement",
+      workspace: root,
+      mode: "implement"
+    }
+  });
+  assert.equal(blockedRoutineImplement.status, 400);
+
   const timeoutWriter = createJob({
     goal: "Smoke timeout writer lock",
     workspace: root,

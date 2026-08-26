@@ -308,6 +308,41 @@ export function listJobEvents(jobId) {
   `).all(Number(jobId)).map(formatJobEvent);
 }
 
+export function updateJobDraft(id, { goal, mode }) {
+  const current = getJob(id);
+  if (!current) {
+    throw new Error("Job not found.");
+  }
+  if (current.status !== "draft") {
+    throw new Error("Only draft jobs can be edited.");
+  }
+
+  const nextGoal = goal === undefined ? current.goal : redactText(String(goal || "").trim());
+  const nextMode = mode === undefined ? current.mode : String(mode || current.mode);
+  if (!nextGoal) {
+    throw new Error("Job goal is required.");
+  }
+  if (!JOB_MODES.has(nextMode)) {
+    throw new Error(`Invalid job mode: ${nextMode}`);
+  }
+  if (nextMode === "implement" && current.requestedBy === "routine") {
+    throw new Error("Routine draft jobs cannot switch to implement mode.");
+  }
+
+  db.prepare(`
+    UPDATE jobs
+    SET goal = ?, mode = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(nextGoal, nextMode, Number(id));
+
+  insertJobEvent(current.id, "job.draft_updated", "Draft job updated.", {
+    goal: nextGoal,
+    mode: nextMode
+  });
+
+  return getJob(id);
+}
+
 export function recordJobEvent(jobId, type, message = "", data = {}) {
   const job = getJob(jobId);
   if (!job) {

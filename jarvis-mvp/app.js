@@ -387,6 +387,7 @@ function renderJobDetail() {
   const approval = renderImplementationApproval(job);
   const analystConsent = renderAnalystConsent(job);
   const debateControls = renderDebateControls(job);
+  const routineDraftControls = renderRoutineDraftControls(job);
   const notes = document.createElement("div");
   notes.className = "job-notes";
   if (job.summary) {
@@ -440,6 +441,9 @@ function renderJobDetail() {
   }
   if (debateControls) {
     els.jobDetail.append(debateControls);
+  }
+  if (routineDraftControls) {
+    els.jobDetail.append(routineDraftControls);
   }
   els.jobDetail.append(notes, artifactTitle, artifactList, eventTitle, eventList);
 }
@@ -564,6 +568,78 @@ function renderDebateControls(job) {
 
   panel.append(summary, button);
   return panel;
+}
+
+function renderRoutineDraftControls(job) {
+  if (job.requestedBy !== "routine" || job.status !== "draft") {
+    return null;
+  }
+
+  const form = document.createElement("form");
+  form.className = "routine-draft";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = job.goal;
+  input.setAttribute("aria-label", "Editar draft da rotina");
+
+  const mode = document.createElement("select");
+  mode.setAttribute("aria-label", "Modo do draft");
+  for (const value of ["ask", "analyze"]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    option.selected = job.mode === value;
+    mode.append(option);
+  }
+
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.textContent = "Guardar";
+
+  const approve = document.createElement("button");
+  approve.type = "button";
+  approve.className = "primary";
+  approve.textContent = "Aprovar";
+  approve.addEventListener("click", async () => {
+    const result = await api(`/api/jobs/${job.id}/approve`, { method: "POST" });
+    state.selectedJob = result.job;
+    state.selectedJobEvents = result.events || [];
+    state.selectedJobArtifacts = result.artifacts || [];
+    await refreshJobs();
+    logEvent("job.approve", { id: job.id, status: result.job.status });
+  });
+
+  const discard = document.createElement("button");
+  discard.type = "button";
+  discard.className = "danger-button";
+  discard.textContent = "Descartar";
+  discard.addEventListener("click", async () => {
+    const result = await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
+    state.selectedJob = result.job;
+    state.selectedJobEvents = result.events || [];
+    await refreshJobs();
+    logEvent("job.discard", { id: job.id, status: result.job.status });
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const result = await api(`/api/jobs/${job.id}`, {
+      method: "PATCH",
+      body: {
+        goal: input.value.trim(),
+        mode: mode.value
+      }
+    });
+    state.selectedJob = result.job;
+    state.selectedJobEvents = result.events || [];
+    state.selectedJobArtifacts = result.artifacts || [];
+    await refreshJobs();
+    logEvent("job.draft.update", { id: job.id });
+  });
+
+  form.append(input, mode, save, approve, discard);
+  return form;
 }
 
 function canSynthesizeDebate(job) {
@@ -704,15 +780,54 @@ function formatDateTime(value) {
 }
 
 function renderRoutine() {
+  els.routinePanel.replaceChildren();
   if (!state.routineEnabled) {
     els.routinePanel.textContent = "Rotina pausada.";
     return;
   }
 
   const tasks = state.tasks.filter((task) => task.status !== "done");
-  els.routinePanel.textContent = tasks.length
+  const summary = document.createElement("p");
+  summary.textContent = tasks.length
     ? `Hoje: ${tasks.map((task) => task.title).join(" · ")}`
     : "Rotina ativa. Nenhuma tarefa aberta agora.";
+
+  const form = document.createElement("form");
+  form.className = "routine-job-form";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = tasks.length ? `Analisar prioridades de hoje: ${tasks.map((task) => task.title).join(", ")}` : "Analisar proximos passos do dia";
+  input.setAttribute("aria-label", "Draft sugerido pela rotina");
+
+  const mode = document.createElement("select");
+  mode.setAttribute("aria-label", "Modo da sugestao");
+  for (const value of ["analyze", "ask"]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    mode.append(option);
+  }
+
+  const button = document.createElement("button");
+  button.type = "submit";
+  button.textContent = "Sugerir";
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const result = await api("/api/routine/jobs", {
+      method: "POST",
+      body: {
+        goal: input.value.trim(),
+        mode: mode.value
+      }
+    });
+    state.selectedJobId = result.job.id;
+    await refreshAll();
+    logEvent("routine.job.created", { id: result.job.id, mode: result.job.mode });
+  });
+
+  form.append(input, mode, button);
+  els.routinePanel.append(summary, form);
 }
 
 async function startScreenCapture() {

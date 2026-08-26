@@ -43,6 +43,8 @@ export const config = {
   realtimeModel: process.env.REALTIME_MODEL || "gpt-realtime-2.1",
   realtimeVoice: process.env.REALTIME_VOICE || "marin",
   dailyRoutineHour: intFromEnv("DAILY_ROUTINE_HOUR", 8),
+  jobHistoryRetentionDays: intFromEnv("JOB_HISTORY_RETENTION_DAYS", 90),
+  jobExportDir: process.env.JOB_EXPORT_DIR || EXPORT_DIR,
   databasePath: path.join(DATA_DIR, "aura.sqlite")
 };
 

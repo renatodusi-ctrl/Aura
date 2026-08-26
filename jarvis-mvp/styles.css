@@ -25,7 +25,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -201,7 +202,8 @@ h2 {
   gap: 8px;
 }
 
-input {
+input,
+select {
   min-width: 0;
   min-height: 40px;
   border: 1px solid var(--line);
@@ -209,6 +211,10 @@ input {
   background: #10141a;
   color: var(--text);
   padding: 0 12px;
+}
+
+select {
+  cursor: pointer;
 }
 
 .toggle {
@@ -252,6 +258,26 @@ input {
   margin-top: 12px;
   color: var(--muted);
   line-height: 1.5;
+}
+
+.routine-job-form,
+.routine-draft {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.routine-job-form {
+  grid-template-columns: minmax(0, 1fr) 110px auto;
+}
+
+.routine-draft {
+  grid-template-columns: minmax(0, 1fr) 110px auto auto auto;
+  margin-bottom: 14px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #11151b;
 }
 
 video {
@@ -668,7 +694,9 @@ video {
   }
 
   .composer,
-  .inline-form {
+  .inline-form,
+  .routine-job-form,
+  .routine-draft {
     grid-template-columns: 1fr;
   }
 

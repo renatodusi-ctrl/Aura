@@ -17,6 +17,7 @@ import {
   listJobArtifacts,
   listJobEvents,
   listJobs,
+  updateJobDraft,
   updateJobStatus
 } from "./memory.js";
 import { getLocalContext, listTools, runTool } from "./tools.js";
@@ -86,6 +87,8 @@ async function route(req, res) {
       realtimeModel: config.realtimeModel,
       realtimeVoice: config.realtimeVoice,
       dailyRoutineHour: config.dailyRoutineHour,
+      jobHistoryRetentionDays: config.jobHistoryRetentionDays,
+      jobExportDir: config.jobExportDir,
       memory: getStatus(),
       tools: listTools()
     });
@@ -103,7 +106,15 @@ async function route(req, res) {
     return createJobRoute(req, res);
   }
 
+  if (url.pathname === "/api/routine/jobs" && method === "POST") {
+    return createRoutineJobRoute(req, res);
+  }
+
   const jobRoute = matchJobRoute(url.pathname);
+  if (jobRoute && method === "PATCH" && !jobRoute.action) {
+    return updateJobDraftRoute(jobRoute.id, req, res);
+  }
+
   if (jobRoute && method === "GET" && !jobRoute.action) {
     const job = getJob(jobRoute.id);
     if (!job) {
@@ -122,6 +133,10 @@ async function route(req, res) {
 
   if (jobRoute && method === "POST" && jobRoute.action === "cancel") {
     return cancelJobRoute(jobRoute.id, res);
+  }
+
+  if (jobRoute && method === "POST" && jobRoute.action === "approve") {
+    return approveJobRoute(jobRoute.id, res);
   }
 
   if (jobRoute && method === "POST" && jobRoute.action === "codex/ask") {
@@ -245,6 +260,72 @@ async function createJobRoute(req, res) {
     return sendJson(res, status, { job: finalJob, events: listJobEvents(job.id), policy });
   } catch (error) {
     return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not create job."));
+  }
+}
+
+async function createRoutineJobRoute(req, res) {
+  try {
+    const body = await readJson(req);
+    const mode = normalizeJobMode(body.mode || "analyze");
+    if (mode === "implement") {
+      throw httpError(400, "Routine cannot create implement jobs automatically.");
+    }
+    const workspace = resolveWorkspace(body.workspace);
+    const job = createJob({
+      goal: body.goal,
+      workspace,
+      mode,
+      requestedBy: "routine",
+      policyLevel: "read",
+      requiresConfirmation: false,
+      timeoutMs: body.timeoutMs || 300000,
+      metadata: {
+        ...(body.metadata || {}),
+        routine: {
+          draft: true,
+          execution: "manual"
+        }
+      }
+    });
+    return sendJson(res, 201, { job, events: listJobEvents(job.id), policy: evaluateJobPolicy("read") });
+  } catch (error) {
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not create routine job."));
+  }
+}
+
+async function updateJobDraftRoute(id, req, res) {
+  try {
+    const job = getJob(id);
+    if (!job) {
+      return sendJson(res, 404, { error: "Job not found." });
+    }
+    const body = await readJson(req);
+    const mode = body.mode === undefined ? undefined : normalizeJobMode(body.mode);
+    if (job.requestedBy === "routine" && mode === "implement") {
+      throw httpError(400, "Routine draft jobs cannot switch to implement mode.");
+    }
+    const updated = updateJobDraft(id, { goal: body.goal, mode });
+    return sendJson(res, 200, { job: updated, events: listJobEvents(updated.id), artifacts: listJobArtifacts(updated.id) });
+  } catch (error) {
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not update draft job."));
+  }
+}
+
+function approveJobRoute(id, res) {
+  try {
+    const job = getJob(id);
+    if (!job) {
+      return sendJson(res, 404, { error: "Job not found." });
+    }
+    if (job.status !== "draft") {
+      throw httpError(409, "Only draft jobs can be approved.");
+    }
+    const queued = updateJobStatus(job.id, "queued", {
+      summary: "Draft approved. Execution remains manual."
+    });
+    return sendJson(res, 200, { job: queued, events: listJobEvents(job.id), artifacts: listJobArtifacts(job.id) });
+  } catch (error) {
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not approve draft job."));
   }
 }
 
@@ -388,7 +469,7 @@ function policyLevelForJobMode(mode, policyLevel) {
 }
 
 function matchJobRoute(pathname) {
-  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|codex\/ask|codex\/implement|analysts\/preview|analysts\/run|debate\/synthesize))?$/);
+  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|approve|codex\/ask|codex\/implement|analysts\/preview|analysts\/run|debate\/synthesize))?$/);
   if (!match) {
     return null;
   }
