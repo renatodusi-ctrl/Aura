@@ -21,6 +21,7 @@ import {
 import { getLocalContext, listTools, runTool } from "./tools.js";
 import { evaluateJobPolicy, normalizePolicyLevel, POLICY_LEVELS } from "./policy.js";
 import { createSessionToken, isAllowedOrigin, isProtectedApiPath, validateSessionRequest } from "./httpSecurity.js";
+import { cancelJobProcess } from "./supervisor.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -227,6 +228,10 @@ function cancelJobRoute(id, res) {
     const job = getJob(id);
     if (!job) {
       return sendJson(res, 404, { error: "Job not found." });
+    }
+
+    if (cancelJobProcess(job.id)) {
+      return sendJson(res, 202, { job: getJob(job.id), cancellation: "requested", events: listJobEvents(job.id) });
     }
 
     const cancelled = updateJobStatus(job.id, "cancelled", {

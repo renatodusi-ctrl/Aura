@@ -61,6 +61,8 @@ The job API is orchestration-only. It does not execute external CLIs.
 
 When a `write` or `git` job already exists in a non-terminal state for a workspace, creating another `write` or `git` job in that same workspace returns `409` with a `lockedBy` summary.
 
+Process execution is owned by `server/supervisor.js`. The supervisor records process start, stdout, stderr, timeout, cancellation and finish events on the parent job.
+
 Create payload:
 
 ```json
