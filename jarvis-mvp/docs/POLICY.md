@@ -18,4 +18,5 @@ AURA uses a central policy model for jobs and tools.
 - Voice can request a job, but must not confirm sensitive work by itself.
 - Jobs that need visual confirmation use `awaiting_confirm`.
 - Jobs blocked by missing typed confirmation are persisted as `failed` with a policy reason.
+- `implement` jobs cannot remain `read`; the API escalates them to `write`.
 - Current local tools still honor confirmation before sensitive actions.

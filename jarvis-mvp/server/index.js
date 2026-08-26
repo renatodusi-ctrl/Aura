@@ -158,7 +158,7 @@ async function createJobRoute(req, res) {
     const body = await readJson(req);
     const workspace = resolveWorkspace(body.workspace);
     const mode = normalizeJobMode(body.mode || "ask");
-    const policyLevel = normalizeJobPolicyLevel(body.policyLevel || (mode === "implement" ? "write" : "read"));
+    const policyLevel = policyLevelForJobMode(mode, normalizeJobPolicyLevel(body.policyLevel || defaultPolicyLevelForMode(mode)));
     const policy = evaluateJobPolicy(policyLevel);
 
     const job = createJob({
@@ -243,6 +243,17 @@ function normalizeJobPolicyLevel(policyLevel) {
   } catch {
     throw httpError(400, `Invalid job policy level: ${policyLevel}. Use ${POLICY_LEVELS.join(", ")}.`);
   }
+}
+
+function defaultPolicyLevelForMode(mode) {
+  return mode === "implement" ? "write" : "read";
+}
+
+function policyLevelForJobMode(mode, policyLevel) {
+  if (mode === "implement" && policyLevel === "read") {
+    return "write";
+  }
+  return policyLevel;
 }
 
 function matchJobRoute(pathname) {

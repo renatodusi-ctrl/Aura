@@ -22,6 +22,7 @@ for (const level of ["secrets", "destructive"]) {
 
 assert.equal(evaluateToolPolicy("destructive").allowed, true);
 assert.equal(evaluateToolPolicy("destructive").requiresConfirmation, true);
+assert.equal(evaluateToolPolicy("destructive").confirmationType, "typed_confirm");
 assert.throws(() => normalizePolicyLevel("admin"), /Invalid policy level/);
 
 console.log("Policy verification passed.");
