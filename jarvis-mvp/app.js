@@ -666,8 +666,14 @@ function renderActiveDemand() {
     return;
   }
 
+  const timeline = renderDemandTimeline(job);
+  const security = renderSecurityBand(job);
   const alert = renderHumanFailure(job);
   els.activeDemand.append(status, goal, meta, tabs);
+  els.activeDemand.append(timeline);
+  if (security) {
+    els.activeDemand.append(security);
+  }
   if (alert) {
     els.activeDemand.append(alert);
   }
@@ -717,6 +723,114 @@ function humanizeJobMessage(value) {
     return "A demanda precisa de permissao ou confirmacao antes de continuar. Revise o risco e aprove somente se fizer sentido.";
   }
   return text;
+}
+
+function renderDemandTimeline(job) {
+  const current = currentTimelineStep(job);
+  const steps = [
+    ["received", "recebido"],
+    ["analyzing", "analisando"],
+    ["council", "conselho"],
+    ["approval", "aguardando aprovacao"],
+    ["executing", "executando"],
+    ["result", "resultado"]
+  ];
+  const list = document.createElement("ol");
+  list.className = "demand-timeline";
+  list.setAttribute("aria-label", "Timeline da demanda");
+  for (const [key, label] of steps) {
+    const item = document.createElement("li");
+    item.className = key === current ? "current" : "";
+    item.setAttribute("aria-current", key === current ? "step" : "false");
+    item.textContent = label;
+    list.append(item);
+  }
+  return list;
+}
+
+function currentTimelineStep(job) {
+  if (["done", "failed", "cancelled"].includes(job.status)) {
+    return "result";
+  }
+  if (job.status === "awaiting_confirm" || job.status === "needs_input") {
+    return "approval";
+  }
+  if (job.status === "queued" || job.status === "running") {
+    return "executing";
+  }
+  if (job.mode === "analyze") {
+    return "council";
+  }
+  if (job.mode === "implement") {
+    return "approval";
+  }
+  return "analyzing";
+}
+
+function renderSecurityBand(job) {
+  if (!canConfirmImplementJob(job)) {
+    return null;
+  }
+
+  const metadata = job.metadata || {};
+  const policy = metadata.policy || {};
+  const panel = document.createElement("section");
+  panel.className = "security-band";
+  panel.setAttribute("aria-label", "Confirmacao de seguranca da demanda");
+
+  const title = document.createElement("strong");
+  title.textContent = "Aguardando aprovacao";
+
+  const facts = document.createElement("dl");
+  facts.className = "security-facts";
+  appendFact(facts, "Risco", metadata.risk || riskForPolicy(job.policyLevel));
+  const likelyFiles = Array.isArray(metadata.likelyFiles) ? metadata.likelyFiles.join(", ") : metadata.likelyFiles;
+  appendFact(facts, "Dados/arquivos", likelyFiles || "Workspace local aprovado para esta demanda.");
+  appendFact(facts, "Motivo", humanizeJobMessage(policy.reason || "Esta demanda pode alterar arquivos locais."));
+
+  const controls = document.createElement("div");
+  controls.className = "security-actions";
+
+  const approve = document.createElement("button");
+  approve.type = "button";
+  approve.className = "primary";
+  approve.textContent = "Aprovar";
+  approve.addEventListener("click", async () => {
+    try {
+      appendMessage("system", `Executando demanda #${job.id} com Codex apos aprovacao visual.`);
+      await api(`/api/jobs/${job.id}/codex/implement`, {
+        method: "POST",
+        body: { confirmed: true, prompt: job.goal }
+      });
+      await refreshJobs();
+    } catch (error) {
+      appendMessage("system", `Aprovacao nao concluida: ${error.message}`);
+      await refreshJobs();
+    }
+  });
+
+  const deny = document.createElement("button");
+  deny.type = "button";
+  deny.className = "danger-button";
+  deny.textContent = "Negar";
+  deny.addEventListener("click", async () => {
+    const result = await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
+    state.selectedJob = result.job;
+    state.selectedJobEvents = result.events || [];
+    await refreshJobs();
+    appendMessage("system", `Demanda #${job.id} negada sem executar.`);
+  });
+
+  const details = document.createElement("button");
+  details.type = "button";
+  details.textContent = "Ver detalhes";
+  details.addEventListener("click", () => {
+    document.querySelector(".jobs-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  controls.append(approve, deny, details);
+  panel.append(title, facts, controls);
+  return panel;
 }
 
 function renderJobDetail() {
