@@ -4,6 +4,10 @@ const state = {
   status: null,
   tasks: [],
   memories: [],
+  jobs: [],
+  selectedJobId: null,
+  selectedJob: null,
+  selectedJobEvents: [],
   events: [],
   routineEnabled: localStorage.getItem("aura.routineEnabled") === "true",
   screenStream: null,
@@ -27,6 +31,9 @@ const els = {
   memoryForm: document.querySelector("#memory-form"),
   memoryInput: document.querySelector("#memory-input"),
   memoryList: document.querySelector("#memory-list"),
+  jobsRefreshButton: document.querySelector("#jobs-refresh-button"),
+  jobList: document.querySelector("#job-list"),
+  jobDetail: document.querySelector("#job-detail"),
   eventLog: document.querySelector("#event-log"),
   screenVideo: document.querySelector("#screen-video"),
   routinePanel: document.querySelector("#routine-panel"),
@@ -53,6 +60,9 @@ async function init() {
   bindEvents();
   await refreshAll();
   renderRoutine();
+  setInterval(() => {
+    refreshJobs().catch((error) => logEvent("jobs.refresh.failed", { error: error.message }));
+  }, 5000);
 }
 
 async function loadSession() {
@@ -131,23 +141,52 @@ function bindEvents() {
 
   els.screenButton.addEventListener("click", startScreenCapture);
   els.stopScreenButton.addEventListener("click", stopScreenCapture);
+  els.jobsRefreshButton.addEventListener("click", refreshJobs);
 }
 
 async function refreshAll() {
-  const [status, tasksData, memoriesData] = await Promise.all([
+  const [status, tasksData, memoriesData, jobsData] = await Promise.all([
     api("/api/status"),
     api("/api/tasks"),
-    api("/api/memories")
+    api("/api/memories"),
+    api("/api/jobs?limit=20")
   ]);
 
   state.status = status;
   state.tasks = tasksData.tasks;
   state.memories = memoriesData.memories;
+  state.jobs = jobsData.jobs;
+  await loadSelectedJob();
   renderStatus();
   renderTasks();
   renderMemories();
+  renderJobs();
   renderTools();
   renderRoutine();
+}
+
+async function refreshJobs() {
+  const jobsData = await api("/api/jobs?limit=20");
+  state.jobs = jobsData.jobs;
+  await loadSelectedJob();
+  renderJobs();
+}
+
+async function loadSelectedJob() {
+  if (!state.jobs.length) {
+    state.selectedJobId = null;
+    state.selectedJob = null;
+    state.selectedJobEvents = [];
+    return;
+  }
+
+  if (!state.selectedJobId || !state.jobs.some((job) => job.id === state.selectedJobId)) {
+    state.selectedJobId = state.jobs[0].id;
+  }
+
+  const detail = await api(`/api/jobs/${state.selectedJobId}`);
+  state.selectedJob = detail.job;
+  state.selectedJobEvents = detail.events || [];
 }
 
 function renderStatus() {
@@ -211,12 +250,199 @@ function renderMemories() {
   }));
 }
 
+function renderJobs() {
+  if (!state.jobs.length) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "Nenhum job registrado.";
+    els.jobList.replaceChildren(empty);
+    renderJobDetail();
+    return;
+  }
+
+  els.jobList.replaceChildren(...state.jobs.map((job) => {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `job-row ${job.id === state.selectedJobId ? "selected" : ""}`;
+    button.setAttribute("aria-pressed", String(job.id === state.selectedJobId));
+
+    const title = document.createElement("span");
+    title.className = "job-title";
+    title.textContent = job.goal;
+
+    const meta = document.createElement("small");
+    meta.textContent = `#${job.id} · ${job.mode} · ${job.policyLevel}`;
+
+    const status = document.createElement("span");
+    status.className = `status-chip ${job.status}`;
+    status.textContent = labelForJobStatus(job.status);
+
+    button.append(title, meta, status);
+    button.addEventListener("click", async () => {
+      state.selectedJobId = job.id;
+      await loadSelectedJob();
+      renderJobs();
+    });
+
+    item.append(button);
+    return item;
+  }));
+
+  renderJobDetail();
+}
+
+function renderJobDetail() {
+  els.jobDetail.replaceChildren();
+
+  if (!state.selectedJob) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "Historico vazio.";
+    els.jobDetail.append(empty);
+    return;
+  }
+
+  const job = state.selectedJob;
+  const header = document.createElement("div");
+  header.className = "job-detail-header";
+
+  const titleGroup = document.createElement("div");
+  const title = document.createElement("h3");
+  title.textContent = `Job #${job.id}`;
+  const goal = document.createElement("p");
+  goal.textContent = job.goal;
+  titleGroup.append(title, goal);
+
+  const actions = document.createElement("div");
+  actions.className = "job-actions";
+  const status = document.createElement("span");
+  status.className = `status-chip ${job.status}`;
+  status.textContent = labelForJobStatus(job.status);
+  actions.append(status);
+
+  if (canCancelJob(job)) {
+    const cancelButton = document.createElement("button");
+    cancelButton.type = "button";
+    cancelButton.className = "danger-button";
+    cancelButton.textContent = "Cancelar";
+    cancelButton.addEventListener("click", async () => {
+      if (!confirm(`Cancelar job #${job.id}?`)) {
+        return;
+      }
+      const result = await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      await refreshJobs();
+      logEvent("job.cancel", { id: job.id, status: result.job.status });
+    });
+    actions.append(cancelButton);
+  }
+
+  header.append(titleGroup, actions);
+
+  const facts = document.createElement("dl");
+  facts.className = "job-facts";
+  appendFact(facts, "Workspace", job.workspace);
+  appendFact(facts, "Modo", job.mode);
+  appendFact(facts, "Policy", job.policyLevel);
+  appendFact(facts, "Origem", job.requestedBy);
+  appendFact(facts, "Criado", formatDateTime(job.createdAt));
+  appendFact(facts, "Atualizado", formatDateTime(job.updatedAt));
+  appendFact(facts, "Timeout", `${job.timeoutMs} ms`);
+
+  const notes = document.createElement("div");
+  notes.className = "job-notes";
+  if (job.summary) {
+    const summary = document.createElement("p");
+    summary.innerHTML = `<strong>Resumo</strong><span></span>`;
+    summary.querySelector("span").textContent = job.summary;
+    notes.append(summary);
+  }
+  if (job.error) {
+    const error = document.createElement("p");
+    error.className = "error-text";
+    error.innerHTML = `<strong>Erro</strong><span></span>`;
+    error.querySelector("span").textContent = job.error;
+    notes.append(error);
+  }
+
+  const eventTitle = document.createElement("h3");
+  eventTitle.textContent = "Eventos";
+  const eventList = document.createElement("ul");
+  eventList.className = "job-events";
+  const events = state.selectedJobEvents.length ? state.selectedJobEvents : [];
+  eventList.replaceChildren(...events.map(renderJobEvent));
+
+  if (!events.length) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "Sem eventos.";
+    eventList.append(empty);
+  }
+
+  els.jobDetail.append(header, facts, notes, eventTitle, eventList);
+}
+
+function renderJobEvent(event) {
+  const item = document.createElement("li");
+  const main = document.createElement("div");
+  const type = document.createElement("code");
+  type.textContent = event.type;
+  const message = document.createElement("span");
+  message.textContent = event.message || "";
+  main.append(type, message);
+
+  const time = document.createElement("time");
+  time.dateTime = event.createdAt;
+  time.textContent = formatDateTime(event.createdAt);
+
+  item.append(main, time);
+  return item;
+}
+
 function renderTools() {
   els.toolsList.replaceChildren(...state.status.tools.map((tool) => {
     const item = document.createElement("li");
     item.innerHTML = `<span>${tool.name}</span><small>${tool.requiresConfirmation ? "confirma" : "seguro"}</small>`;
     return item;
   }));
+}
+
+function appendFact(list, label, value) {
+  const term = document.createElement("dt");
+  term.textContent = label;
+  const detail = document.createElement("dd");
+  detail.textContent = value || "-";
+  list.append(term, detail);
+}
+
+function canCancelJob(job) {
+  return ["draft", "awaiting_confirm", "queued", "running", "needs_input"].includes(job.status);
+}
+
+function labelForJobStatus(status) {
+  const labels = {
+    draft: "draft",
+    awaiting_confirm: "aguardando",
+    queued: "fila",
+    running: "rodando",
+    needs_input: "entrada",
+    done: "concluido",
+    failed: "falhou",
+    cancelled: "cancelado"
+  };
+  return labels[status] || status;
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return "-";
+  }
+  return new Date(`${value}Z`).toLocaleString("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short"
+  });
 }
 
 function renderRoutine() {
