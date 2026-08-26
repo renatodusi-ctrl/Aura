@@ -109,7 +109,7 @@ function bindEvents() {
       els.voiceButton.dataset.connected = "true";
       els.voiceButton.textContent = "Desconectar voz";
     } catch (error) {
-      appendMessage("system", `Nao consegui abrir a voz ao vivo: ${error.message}. Podemos continuar por texto local.`);
+      appendMessage("system", `Nao consegui abrir a voz ao vivo porque ${humanizeVoiceError(error)}. Podemos continuar por texto local.`);
       setVoiceStatus("fallback");
     }
   });
@@ -1442,10 +1442,14 @@ function renderRoutine() {
 
   const mode = document.createElement("select");
   mode.setAttribute("aria-label", "Modo da sugestao");
-  for (const value of ["analyze", "ask"]) {
+  const modeOptions = [
+    ["analyze", "Consultar conselho"],
+    ["ask", "Conversar"]
+  ];
+  for (const [value, label] of modeOptions) {
     const option = document.createElement("option");
     option.value = value;
-    option.textContent = value;
+    option.textContent = label;
     mode.append(option);
   }
 
@@ -1455,16 +1459,20 @@ function renderRoutine() {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const result = await api("/api/routine/jobs", {
-      method: "POST",
-      body: {
-        goal: input.value.trim(),
-        mode: mode.value
-      }
-    });
-    state.selectedJobId = result.job.id;
-    await refreshAll();
-    logEvent("routine.job.created", { id: result.job.id, mode: result.job.mode });
+    try {
+      const result = await api("/api/routine/jobs", {
+        method: "POST",
+        body: {
+          goal: input.value.trim(),
+          mode: mode.value
+        }
+      });
+      state.selectedJobId = result.job.id;
+      await refreshAll();
+      logEvent("routine.job.created", { id: result.job.id, mode: result.job.mode });
+    } catch (error) {
+      appendMessage("system", `Nao consegui criar a demanda da rotina: ${error.message}`);
+    }
   });
 
   form.append(input, mode, button);
@@ -1511,6 +1519,20 @@ function setVoiceStatus(status) {
     els.voiceButton.dataset.connected = "false";
     els.voiceButton.textContent = "Conectar voz";
   }
+}
+
+function humanizeVoiceError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  if (message.includes("openai_api_key")) {
+    return "a chave de voz ao vivo nao esta configurada";
+  }
+  if (message.includes("microphone") || message.includes("microfone") || message.includes("permission")) {
+    return "o microfone nao foi liberado pelo navegador";
+  }
+  if (message.includes("token")) {
+    return "nao foi possivel preparar a sessao segura de voz";
+  }
+  return "houve uma falha de conexao";
 }
 
 function appendAssistantDelta(delta) {
