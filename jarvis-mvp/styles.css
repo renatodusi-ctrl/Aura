@@ -516,6 +516,23 @@ video {
   height: 18px;
 }
 
+.debate-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #11151b;
+}
+
+.debate-controls p {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .job-notes p,
 .approval-summary p {
   display: grid;
@@ -636,6 +653,11 @@ video {
 
   .status {
     justify-content: flex-start;
+  }
+
+  .debate-controls {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "verify": "node --check app.js && node --check realtime.js && node --check server/index.js && node --check server/config.js && node --check server/memory.js && node --check server/tools.js && node --check server/policy.js && node --check server/redaction.js && node --check server/httpSecurity.js && node --check server/supervisor.js && node --check server/codexAdapter.js && node --check server/analystAdapter.js && node scripts/verify-jobs.mjs && node scripts/verify-policy.mjs && node scripts/verify-redaction.mjs && node scripts/verify-http-security.mjs && node scripts/verify-supervisor.mjs && node scripts/verify-codex-adapter.mjs && node scripts/verify-analysts.mjs && node scripts/verify-jobs-ui.mjs && node scripts/verify-job-smoke.mjs"
+    "verify": "node --check app.js && node --check realtime.js && node --check server/index.js && node --check server/config.js && node --check server/memory.js && node --check server/tools.js && node --check server/policy.js && node --check server/redaction.js && node --check server/httpSecurity.js && node --check server/supervisor.js && node --check server/codexAdapter.js && node --check server/analystAdapter.js && node --check server/debateSynthesizer.js && node scripts/verify-jobs.mjs && node scripts/verify-policy.mjs && node scripts/verify-redaction.mjs && node scripts/verify-http-security.mjs && node scripts/verify-supervisor.mjs && node scripts/verify-codex-adapter.mjs && node scripts/verify-analysts.mjs && node scripts/verify-debate.mjs && node scripts/verify-jobs-ui.mjs && node scripts/verify-job-smoke.mjs"
   },
   "keywords": [
     "aura",

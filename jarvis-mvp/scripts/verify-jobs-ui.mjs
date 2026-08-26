@@ -34,7 +34,11 @@ for (const token of [
   "renderAnalystConsent",
   "buildAnalystPreview",
   "Gemini",
-  "Grok"
+  "Grok",
+  "debate/synthesize",
+  "renderDebateControls",
+  "canSynthesizeDebate",
+  "Sintetizar"
 ]) {
   assert.match(app, new RegExp(token), `Missing jobs UI token: ${token}`);
 }

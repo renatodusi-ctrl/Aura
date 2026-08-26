@@ -383,6 +383,7 @@ function renderJobDetail() {
 
   const approval = renderImplementationApproval(job);
   const analystConsent = renderAnalystConsent(job);
+  const debateControls = renderDebateControls(job);
   const notes = document.createElement("div");
   notes.className = "job-notes";
   if (job.summary) {
@@ -433,6 +434,9 @@ function renderJobDetail() {
   }
   if (analystConsent) {
     els.jobDetail.append(analystConsent);
+  }
+  if (debateControls) {
+    els.jobDetail.append(debateControls);
   }
   els.jobDetail.append(notes, artifactTitle, artifactList, eventTitle, eventList);
 }
@@ -519,6 +523,51 @@ function renderAnalystConsent(job) {
   controls.append(gemini.label, grok.label, runButton);
   panel.append(preview, controls);
   return panel;
+}
+
+function renderDebateControls(job) {
+  if (!canSynthesizeDebate(job)) {
+    return null;
+  }
+
+  const panel = document.createElement("div");
+  panel.className = "debate-controls";
+  const summary = document.createElement("p");
+  summary.textContent = "Sintese disponivel para consenso, divergencias, riscos e itens nao verificados.";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "primary";
+  button.textContent = "Sintetizar";
+  button.addEventListener("click", async () => {
+    let result = null;
+    try {
+      result = await api(`/api/jobs/${job.id}/debate/synthesize`, {
+        method: "POST",
+        body: {
+          requested: true,
+          budget: { maxRounds: 1 }
+        }
+      });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      state.selectedJobArtifacts = result.artifacts || [];
+    } catch (error) {
+      appendMessage("system", `Sintese nao concluida: ${error.message}`);
+    }
+    await refreshJobs();
+    logEvent("job.debate", { id: job.id, status: result?.job?.status || "failed" });
+  });
+
+  panel.append(summary, button);
+  return panel;
+}
+
+function canSynthesizeDebate(job) {
+  if (job.mode !== "analyze" || job.policyLevel !== "read") {
+    return false;
+  }
+  return state.selectedJobArtifacts.some((artifact) => artifact.kind === "analyst-response");
 }
 
 function appendApprovalItem(panel, label, value) {

@@ -25,6 +25,7 @@ import { createSessionToken, isAllowedOrigin, isProtectedApiPath, validateSessio
 import { cancelJobProcess } from "./supervisor.js";
 import { detectCodex, runCodexAsk, runCodexImplement } from "./codexAdapter.js";
 import { buildEvidenceBrief, runAnalysts } from "./analystAdapter.js";
+import { synthesizeDebate } from "./debateSynthesizer.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -136,6 +137,10 @@ async function route(req, res) {
 
   if (jobRoute && method === "POST" && jobRoute.action === "analysts/run") {
     return analystsRunRoute(jobRoute.id, req, res);
+  }
+
+  if (jobRoute && method === "POST" && jobRoute.action === "debate/synthesize") {
+    return debateSynthesizeRoute(jobRoute.id, req, res);
   }
 
   if (url.pathname === "/api/memories" && method === "GET") {
@@ -323,6 +328,20 @@ async function analystsRunRoute(id, req, res) {
   }
 }
 
+async function debateSynthesizeRoute(id, req, res) {
+  try {
+    const body = await readJson(req);
+    const output = synthesizeDebate({
+      jobId: id,
+      requested: body.requested === true,
+      budget: body.budget || {}
+    });
+    return sendJson(res, 200, output);
+  } catch (error) {
+    return sendJson(res, 400, { error: error.message || "Could not synthesize debate." });
+  }
+}
+
 function resolveWorkspace(workspace = ROOT_DIR) {
   const resolved = path.resolve(String(workspace || ROOT_DIR));
   let stat;
@@ -368,7 +387,7 @@ function policyLevelForJobMode(mode, policyLevel) {
 }
 
 function matchJobRoute(pathname) {
-  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|codex\/ask|codex\/implement|analysts\/preview|analysts\/run))?$/);
+  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|codex\/ask|codex\/implement|analysts\/preview|analysts\/run|debate\/synthesize))?$/);
   if (!match) {
     return null;
   }
