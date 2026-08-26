@@ -1,8 +1,9 @@
 export class RealtimeClient {
-  constructor({ onEvent, onStatus, onTranscript }) {
+  constructor({ onEvent, onStatus, onTranscript, sessionToken }) {
     this.onEvent = onEvent;
     this.onStatus = onStatus;
     this.onTranscript = onTranscript;
+    this.sessionToken = sessionToken || (() => "");
     this.pc = null;
     this.dc = null;
     this.stream = null;
@@ -11,7 +12,11 @@ export class RealtimeClient {
 
   async connect() {
     this.onStatus("requesting-token");
-    const tokenResponse = await fetch("/api/realtime/token");
+    const tokenResponse = await fetch("/api/realtime/token", {
+      headers: {
+        "X-AURA-Session": this.sessionToken()
+      }
+    });
     if (!tokenResponse.ok) {
       const error = await tokenResponse.json().catch(() => ({}));
       throw new Error(error.error || "Could not create Realtime token.");

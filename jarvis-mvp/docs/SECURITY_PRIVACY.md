@@ -12,6 +12,19 @@ AURA runs locally and stores memory in `data/aura.sqlite`. The database is ignor
 
 Actions that delete data or request sensitive browser permissions require explicit user confirmation.
 
+## Local API Protection
+
+Sensitive local API routes require:
+
+- an allowed local origin;
+- an `X-AURA-Session` token issued by `GET /api/session`.
+
+Unexpected browser origins are rejected before sensitive endpoints run.
+
+## Redaction
+
+Job events, job metadata and tool run input/output are redacted before persistence. The baseline redactor masks token-like values, sensitive keys and `.env` paths.
+
 ## Screen Capture
 
 Screen capture uses the browser `getDisplayMedia` prompt. It is opt-in per session and can be stopped from the cockpit or browser controls.

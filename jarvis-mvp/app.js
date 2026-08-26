@@ -7,7 +7,8 @@ const state = {
   events: [],
   routineEnabled: localStorage.getItem("aura.routineEnabled") === "true",
   screenStream: null,
-  realtime: null
+  realtime: null,
+  sessionToken: ""
 };
 
 const els = {
@@ -35,6 +36,8 @@ const els = {
 init();
 
 async function init() {
+  await loadSession();
+
   state.realtime = new RealtimeClient({
     onStatus: setVoiceStatus,
     onEvent: (event) => {
@@ -43,12 +46,22 @@ async function init() {
         refreshAll();
       }
     },
-    onTranscript: appendAssistantDelta
+    onTranscript: appendAssistantDelta,
+    sessionToken: () => state.sessionToken
   });
 
   bindEvents();
   await refreshAll();
   renderRoutine();
+}
+
+async function loadSession() {
+  const response = await fetch("/api/session");
+  const data = await response.json();
+  if (!response.ok || !data.token) {
+    throw new Error("Could not establish local AURA session.");
+  }
+  state.sessionToken = data.token;
 }
 
 function bindEvents() {
@@ -303,9 +316,16 @@ function iconButton(text, title) {
 }
 
 async function api(path, options = {}) {
+  const headers = {
+    "X-AURA-Session": state.sessionToken
+  };
+  if (options.body) {
+    headers["Content-Type"] = "application/json";
+  }
+
   const response = await fetch(path, {
     method: options.method || "GET",
-    headers: options.body ? { "Content-Type": "application/json" } : {},
+    headers,
     body: options.body ? JSON.stringify(options.body) : undefined
   });
 

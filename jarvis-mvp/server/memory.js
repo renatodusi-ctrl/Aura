@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { config } from "./config.js";
+import { redactObject } from "./redaction.js";
 
 let db;
 
@@ -194,8 +195,8 @@ export function recordToolRun(name, status, input, output) {
   db.prepare("INSERT INTO tool_runs (name, status, input, output) VALUES (?, ?, ?, ?)").run(
     name,
     status,
-    JSON.stringify(input || {}),
-    JSON.stringify(output || {})
+    JSON.stringify(redactObject(input || {})),
+    JSON.stringify(redactObject(output || {}))
   );
 }
 
@@ -211,7 +212,7 @@ export function createJob({
   metadata = {}
 }) {
   const normalized = normalizeJobInput({ goal, workspace, mode, status, requestedBy, policyLevel, timeoutMs });
-  const normalizedMetadata = normalizeJsonObject(metadata, "Job metadata");
+  const normalizedMetadata = redactObject(normalizeJsonObject(metadata, "Job metadata"));
   if (normalized.status !== "draft") {
     throw new Error("New jobs must start as draft.");
   }
@@ -354,7 +355,7 @@ export function updateJobStatus(id, status, patch = {}) {
 }
 
 function insertJobEvent(jobId, type, message = "", data = {}) {
-  const normalizedData = normalizeJsonObject(data, "Job event data");
+  const normalizedData = redactObject(normalizeJsonObject(data, "Job event data"));
   const result = db.prepare(`
     INSERT INTO job_events (job_id, type, message, data)
     VALUES (?, ?, ?, ?)
