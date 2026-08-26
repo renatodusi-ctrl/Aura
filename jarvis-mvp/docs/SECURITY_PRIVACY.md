@@ -14,16 +14,16 @@ Actions that delete data or request sensitive browser permissions require explic
 
 ## Local API Protection
 
-Sensitive local API routes require:
+Sensitive local API routes, including local context and jobs, require:
 
 - an allowed local origin;
 - an `X-AURA-Session` token issued by `GET /api/session`.
 
-Unexpected browser origins are rejected before sensitive endpoints run.
+Unexpected browser origins are rejected before sensitive endpoints run. The allowlist is fixed to `127.0.0.1`, `localhost`, and the configured bind host when it is not a wildcard host.
 
 ## Redaction
 
-Job events, job metadata and tool run input/output are redacted before persistence. The baseline redactor masks token-like values, sensitive keys and `.env` paths.
+Job goals, job event messages, job event data, job metadata and tool run input/output are redacted before persistence. The baseline redactor masks token-like values, sensitive keys and `.env` paths.
 
 ## Screen Capture
 

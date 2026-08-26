@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { config } from "./config.js";
-import { redactObject } from "./redaction.js";
+import { redactObject, redactText } from "./redaction.js";
 
 let db;
 
@@ -359,7 +359,7 @@ function insertJobEvent(jobId, type, message = "", data = {}) {
   const result = db.prepare(`
     INSERT INTO job_events (job_id, type, message, data)
     VALUES (?, ?, ?, ?)
-  `).run(Number(jobId), String(type || "job.event"), message || null, JSON.stringify(normalizedData));
+  `).run(Number(jobId), String(type || "job.event"), message ? redactText(message) : null, JSON.stringify(normalizedData));
 
   const event = db.prepare(`
     SELECT
@@ -376,7 +376,7 @@ function insertJobEvent(jobId, type, message = "", data = {}) {
 }
 
 function normalizeJobInput({ goal, workspace, mode, status, requestedBy = "text", policyLevel, timeoutMs }) {
-  const normalizedGoal = String(goal || "").trim();
+  const normalizedGoal = redactText(String(goal || "").trim());
   const normalizedWorkspace = String(workspace || "").trim();
   const normalizedRequestedBy = String(requestedBy || "text");
 

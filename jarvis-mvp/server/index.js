@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { config, ensureRuntime, ROOT_DIR } from "./config.js";
 import {
@@ -21,6 +20,7 @@ import {
 } from "./memory.js";
 import { getLocalContext, listTools, runTool } from "./tools.js";
 import { evaluateJobPolicy, normalizePolicyLevel, POLICY_LEVELS } from "./policy.js";
+import { createSessionToken, isAllowedOrigin, isProtectedApiPath, validateSessionRequest } from "./httpSecurity.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,7 +37,7 @@ const contentTypes = {
 };
 
 const JOB_API_MODES = new Set(["ask", "analyze", "implement"]);
-const sessionToken = crypto.randomBytes(32).toString("base64url");
+const sessionToken = createSessionToken();
 ensureRuntime();
 initMemory();
 
@@ -60,13 +60,13 @@ async function route(req, res) {
   const method = req.method || "GET";
 
   if (url.pathname === "/api/session" && method === "GET") {
-    if (!isAllowedOrigin(req)) {
+    if (!isAllowedOrigin(req.headers.origin, { host: config.host, port: config.port })) {
       return sendJson(res, 403, { error: "Unexpected request origin." });
     }
     return sendJson(res, 200, { token: sessionToken });
   }
 
-  if (isProtectedApiRequest(url, method)) {
+  if (isProtectedApiPath(url.pathname, method)) {
     const protection = validateApiProtection(req);
     if (!protection.ok) {
       return sendJson(res, protection.status, { error: protection.error });
@@ -169,47 +169,14 @@ async function route(req, res) {
   return serveStatic(url.pathname, res);
 }
 
-function isProtectedApiRequest(url, method) {
-  if (!url.pathname.startsWith("/api/")) {
-    return false;
-  }
-
-  if (url.pathname === "/api/session" || url.pathname === "/api/status" || url.pathname === "/api/realtime/config") {
-    return false;
-  }
-
-  if (url.pathname === "/api/context" && method === "GET") {
-    return false;
-  }
-
-  return true;
-}
-
 function validateApiProtection(req) {
-  if (!isAllowedOrigin(req)) {
-    return { ok: false, status: 403, error: "Unexpected request origin." };
-  }
-
-  if (req.headers["x-aura-session"] !== sessionToken) {
-    return { ok: false, status: 401, error: "Missing or invalid AURA session token." };
-  }
-
-  return { ok: true };
-}
-
-function isAllowedOrigin(req) {
-  const origin = req.headers.origin;
-  if (!origin) {
-    return true;
-  }
-
-  const allowedOrigins = new Set([
-    `http://${req.headers.host}`,
-    `http://${config.host}:${config.port}`,
-    `http://127.0.0.1:${config.port}`,
-    `http://localhost:${config.port}`
-  ]);
-  return allowedOrigins.has(origin);
+  return validateSessionRequest({
+    origin: req.headers.origin,
+    token: req.headers["x-aura-session"],
+    expectedToken: sessionToken,
+    host: config.host,
+    port: config.port
+  });
 }
 
 async function createJobRoute(req, res) {

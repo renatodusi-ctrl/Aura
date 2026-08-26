@@ -15,5 +15,6 @@ const redacted = redactObject({
 assert.equal(redacted.apiKey, "[REDACTED]");
 assert.equal(redacted.nested.path, "[REDACTED_ENV_PATH]");
 assert.equal(redacted.nested.text, "GITHUB_TOKEN=[REDACTED]");
+assert.equal(redactText("job event has sk-abcdefghijklmnop"), "job event has [REDACTED_OPENAI_KEY]");
 
 console.log("Redaction verification passed.");
