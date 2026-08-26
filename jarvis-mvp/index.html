@@ -90,7 +90,8 @@
           <div class="session-tabs" role="tablist" aria-label="Contexto local">
             <button type="button" role="tab" data-session-tab="tasks" aria-selected="true">Tarefas</button>
             <button type="button" role="tab" data-session-tab="memory" aria-selected="false">Memoria</button>
-            <button type="button" role="tab" data-session-tab="system" aria-selected="false">Sistema</button>
+            <button type="button" role="tab" data-session-tab="tools" aria-selected="false">Ferramentas</button>
+            <button type="button" role="tab" data-session-tab="events" aria-selected="false">Eventos</button>
           </div>
         </div>
 
@@ -112,9 +113,12 @@
           <ul id="memory-list" class="list"></ul>
         </div>
 
-        <div class="workspace-tab" data-session-panel="system" role="tabpanel" hidden>
+        <div class="workspace-tab" data-session-panel="tools" role="tabpanel" hidden>
           <h2>Ferramentas</h2>
           <ul id="tools-list" class="tools"></ul>
+        </div>
+
+        <div class="workspace-tab" data-session-panel="events" role="tabpanel" hidden>
           <h2>Eventos</h2>
           <ul id="event-log" class="events"></ul>
         </div>
