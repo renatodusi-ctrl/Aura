@@ -31,17 +31,17 @@ export function parseVoiceIntent(text) {
     return null;
   }
 
-  const cancel = normalized.match(/\b(?:cancelar|cancele|parar|pare)\s+(?:(?:o|do)\s+)?job\s+(\d+)\b/);
+  const cancel = normalized.match(/\b(?:cancelar|cancele|parar|pare)\s+(?:(?:o|do|a|da)\s+)?(?:job|demanda)\s+(\d+)\b/);
   if (cancel) {
     return { type: "job.cancel", id: Number(cancel[1]) };
   }
 
-  const statusOne = normalized.match(/\b(?:status|consultar|consulte|como esta|ver)\s+(?:(?:o|do)\s+)?job\s+(\d+)\b/);
+  const statusOne = normalized.match(/\b(?:status|consultar|consulte|como esta|ver)\s+(?:(?:o|do|a|da)\s+)?(?:job|demanda)\s+(\d+)\b/);
   if (statusOne) {
     return { type: "job.status", id: Number(statusOne[1]) };
   }
 
-  if (/\b(?:status|consultar|listar|mostrar)\s+(?:dos\s+)?jobs\b/.test(normalized)) {
+  if (/\b(?:status|consultar|listar|mostrar)\s+(?:(?:dos\s+)?jobs|(?:as\s+|das\s+)?demandas)\b/.test(normalized)) {
     return { type: "job.status", id: null };
   }
 
@@ -97,8 +97,8 @@ function createJobFromVoice(intent) {
 
   return {
     reply: finalJob.status === "awaiting_confirm"
-      ? `Job ${finalJob.id} criado. Precisa de confirmacao visual antes de escrever.`
-      : `Job ${finalJob.id} criado em modo ${finalJob.mode}.`,
+      ? `Demanda ${finalJob.id} criada. Precisa de confirmacao visual antes de escrever.`
+      : `Demanda ${finalJob.id} criada em modo ${finalJob.mode}.`,
     intent: { type: "job.create", mode: finalJob.mode },
     job: finalJob
   };
@@ -109,12 +109,12 @@ function jobStatusForVoice(intent) {
     const job = getJob(intent.id);
     if (!job) {
       return {
-        reply: `Nao encontrei o job ${intent.id}.`,
+        reply: `Nao encontrei a demanda ${intent.id}.`,
         intent
       };
     }
     return {
-      reply: `Job ${job.id}: ${job.status}. ${job.summary || job.goal}`,
+      reply: `Demanda ${job.id}: ${job.status}. ${job.summary || job.goal}`,
       intent,
       job
     };
@@ -122,8 +122,8 @@ function jobStatusForVoice(intent) {
 
   const jobs = listJobs(5);
   const summary = jobs.length
-    ? jobs.map((job) => `Job ${job.id}: ${job.status}, ${job.mode}`).join(" | ")
-    : "Nenhum job registrado.";
+    ? jobs.map((job) => `Demanda ${job.id}: ${job.status}, ${job.mode}`).join(" | ")
+    : "Nenhuma demanda registrada.";
   return {
     reply: summary,
     intent,
@@ -135,14 +135,14 @@ function cancelJobFromVoice(intent) {
   const job = getJob(intent.id);
   if (!job) {
     return {
-      reply: `Nao encontrei o job ${intent.id}.`,
+      reply: `Nao encontrei a demanda ${intent.id}.`,
       intent
     };
   }
 
   if (cancelJobProcess(job.id)) {
     return {
-      reply: `Cancelamento solicitado para o job ${job.id}.`,
+      reply: `Cancelamento solicitado para a demanda ${job.id}.`,
       intent,
       job: getJob(job.id)
     };
@@ -150,17 +150,17 @@ function cancelJobFromVoice(intent) {
 
   if (["done", "failed", "cancelled"].includes(job.status)) {
     return {
-      reply: `Job ${job.id} ja esta ${job.status}; nao ha execucao para cancelar.`,
+      reply: `Demanda ${job.id} ja esta ${job.status}; nao ha execucao para cancelar.`,
       intent,
       job
     };
   }
 
   const cancelled = updateJobStatus(job.id, "cancelled", {
-    summary: "Job cancelado por comando de voz."
+    summary: "Demanda cancelada por comando de voz."
   });
   return {
-    reply: `Job ${job.id} cancelado.`,
+    reply: `Demanda ${job.id} cancelada.`,
     intent,
     job: cancelled
   };

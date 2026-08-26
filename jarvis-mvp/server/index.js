@@ -554,7 +554,7 @@ function localChat(body) {
   }
 
   return {
-    reply: "Estou em modo local. Posso guardar memorias com \"guardar ...\", criar tarefas com \"tarefa ...\", criar jobs com \"criar job ...\", consultar com \"status do job 1\" e cancelar com \"cancelar job 1\"."
+    reply: "Estou em modo local. Posso guardar memorias com \"guardar ...\", criar tarefas com \"tarefa ...\", criar demandas com \"criar demanda ...\", consultar com \"status da demanda 1\" e cancelar com \"cancelar demanda 1\"."
   };
 }
 

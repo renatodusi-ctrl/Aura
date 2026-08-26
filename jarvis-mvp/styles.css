@@ -216,8 +216,9 @@ h2 {
   margin-top: 16px;
 }
 
-.jobs-panel {
-  margin-top: 16px;
+.jobs-panel,
+.session-panel {
+  margin-top: 32px;
 }
 
 .voice-panel,
@@ -415,6 +416,44 @@ video {
 
 .events code {
   color: var(--accent);
+}
+
+.secondary-surface {
+  scroll-margin-top: 16px;
+}
+
+.demand-filters,
+.session-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.demand-filters {
+  margin-top: 12px;
+}
+
+.demand-filters button,
+.session-tabs button {
+  min-height: 34px;
+  padding: 0 11px;
+  color: var(--muted);
+  background: #10141a;
+}
+
+.demand-filters button[aria-pressed="true"],
+.session-tabs button[aria-selected="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(88, 196, 184, .08);
+}
+
+.workspace-tab {
+  margin-top: 14px;
+}
+
+.workspace-tab[hidden] {
+  display: none;
 }
 
 .jobs-layout {

@@ -10,6 +10,8 @@ const state = {
   selectedJobEvents: [],
   selectedJobArtifacts: [],
   events: [],
+  demandFilter: "all",
+  sessionTab: "tasks",
   routineEnabled: localStorage.getItem("aura.routineEnabled") === "true",
   screenStream: null,
   realtime: null,
@@ -37,8 +39,11 @@ const els = {
   memoryInput: document.querySelector("#memory-input"),
   memoryList: document.querySelector("#memory-list"),
   jobsRefreshButton: document.querySelector("#jobs-refresh-button"),
+  demandFilterButtons: Array.from(document.querySelectorAll("[data-demand-filter]")),
   jobList: document.querySelector("#job-list"),
   jobDetail: document.querySelector("#job-detail"),
+  sessionTabButtons: Array.from(document.querySelectorAll("[data-session-tab]")),
+  sessionPanels: Array.from(document.querySelectorAll("[data-session-panel]")),
   eventLog: document.querySelector("#event-log"),
   screenVideo: document.querySelector("#screen-video"),
   routinePanel: document.querySelector("#routine-panel"),
@@ -150,6 +155,20 @@ function bindEvents() {
   els.screenButton.addEventListener("click", startScreenCapture);
   els.stopScreenButton.addEventListener("click", stopScreenCapture);
   els.jobsRefreshButton.addEventListener("click", refreshJobs);
+  els.demandFilterButtons.forEach((button) => {
+    button.addEventListener("click", async () => {
+      state.demandFilter = button.dataset.demandFilter;
+      state.selectedJobId = null;
+      await loadSelectedJob();
+      renderJobs();
+    });
+  });
+  els.sessionTabButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      state.sessionTab = button.dataset.sessionTab;
+      renderSessionTabs();
+    });
+  });
 }
 
 async function refreshAll() {
@@ -170,6 +189,7 @@ async function refreshAll() {
   renderMemories();
   renderJobs();
   renderTools();
+  renderSessionTabs();
   renderRoutine();
 }
 
@@ -181,7 +201,8 @@ async function refreshJobs() {
 }
 
 async function loadSelectedJob() {
-  if (!state.jobs.length) {
+  const candidates = filteredJobs();
+  if (!candidates.length) {
     state.selectedJobId = null;
     state.selectedJob = null;
     state.selectedJobEvents = [];
@@ -189,8 +210,8 @@ async function loadSelectedJob() {
     return;
   }
 
-  if (!state.selectedJobId || !state.jobs.some((job) => job.id === state.selectedJobId)) {
-    state.selectedJobId = state.jobs[0].id;
+  if (!state.selectedJobId || !candidates.some((job) => job.id === state.selectedJobId)) {
+    state.selectedJobId = candidates[0].id;
   }
 
   const detail = await api(`/api/jobs/${state.selectedJobId}`);
@@ -288,16 +309,28 @@ function renderMemories() {
 }
 
 function renderJobs() {
+  renderDemandFilters();
+
   if (!state.jobs.length) {
     const empty = document.createElement("li");
     empty.className = "empty";
-    empty.textContent = "Nenhum job registrado.";
+    empty.textContent = "Nenhuma demanda registrada.";
     els.jobList.replaceChildren(empty);
     renderJobDetail();
     return;
   }
 
-  els.jobList.replaceChildren(...state.jobs.map((job) => {
+  const jobs = filteredJobs();
+  if (!jobs.length) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "Nenhuma demanda neste filtro.";
+    els.jobList.replaceChildren(empty);
+    renderJobDetail();
+    return;
+  }
+
+  els.jobList.replaceChildren(...jobs.map((job) => {
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
@@ -309,7 +342,7 @@ function renderJobs() {
     title.textContent = job.goal;
 
     const meta = document.createElement("small");
-    meta.textContent = `#${job.id} · ${job.mode} · ${job.policyLevel}`;
+    meta.textContent = `#${job.id} · ${labelForJobMode(job.mode)} · ${labelForPolicy(job.policyLevel)}`;
 
     const status = document.createElement("span");
     status.className = `status-chip ${job.status}`;
@@ -329,6 +362,33 @@ function renderJobs() {
   renderJobDetail();
 }
 
+function renderDemandFilters() {
+  els.demandFilterButtons.forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.demandFilter === state.demandFilter));
+  });
+}
+
+function filteredJobs() {
+  const predicates = {
+    all: () => true,
+    needs: (job) => ["draft", "awaiting_confirm", "needs_input"].includes(job.status),
+    running: (job) => ["queued", "running"].includes(job.status),
+    failed: (job) => ["failed", "cancelled"].includes(job.status),
+    done: (job) => job.status === "done"
+  };
+  const predicate = predicates[state.demandFilter] || predicates.all;
+  return state.jobs.filter(predicate);
+}
+
+function renderSessionTabs() {
+  els.sessionTabButtons.forEach((button) => {
+    button.setAttribute("aria-selected", String(button.dataset.sessionTab === state.sessionTab));
+  });
+  els.sessionPanels.forEach((panel) => {
+    panel.hidden = panel.dataset.sessionPanel !== state.sessionTab;
+  });
+}
+
 function renderJobDetail() {
   els.jobDetail.replaceChildren();
 
@@ -346,7 +406,7 @@ function renderJobDetail() {
 
   const titleGroup = document.createElement("div");
   const title = document.createElement("h3");
-  title.textContent = `Job #${job.id}`;
+  title.textContent = `Demanda #${job.id}`;
   const goal = document.createElement("p");
   goal.textContent = job.goal;
   titleGroup.append(title, goal);
@@ -364,7 +424,7 @@ function renderJobDetail() {
     cancelButton.className = "danger-button";
     cancelButton.textContent = "Cancelar";
     cancelButton.addEventListener("click", async () => {
-      if (!confirm(`Cancelar job #${job.id}?`)) {
+      if (!confirm(`Cancelar demanda #${job.id}?`)) {
         return;
       }
       const result = await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
@@ -382,7 +442,7 @@ function renderJobDetail() {
     runButton.className = "primary";
     runButton.textContent = "Executar";
     runButton.addEventListener("click", async () => {
-      if (!confirm(`Executar job #${job.id} com permissao de escrita no workspace?`)) {
+      if (!confirm(`Executar demanda #${job.id} com permissao de escrita no workspace?`)) {
         return;
       }
       let result = null;
@@ -798,6 +858,27 @@ function labelForJobStatus(status) {
     cancelled: "cancelado"
   };
   return labels[status] || status;
+}
+
+function labelForJobMode(mode) {
+  const labels = {
+    ask: "pergunta",
+    analyze: "analise",
+    implement: "execucao"
+  };
+  return labels[mode] || mode;
+}
+
+function labelForPolicy(policyLevel) {
+  const labels = {
+    read: "leitura",
+    write: "escrita",
+    git: "git",
+    network: "rede",
+    secrets: "segredos",
+    destructive: "destrutivo"
+  };
+  return labels[policyLevel] || policyLevel;
 }
 
 function formatDateTime(value) {

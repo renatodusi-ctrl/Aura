@@ -10,8 +10,11 @@ const jobIds = [];
 
 try {
   assert.deepEqual(parseVoiceIntent("cancelar job 42"), { type: "job.cancel", id: 42 });
+  assert.deepEqual(parseVoiceIntent("cancelar demanda 42"), { type: "job.cancel", id: 42 });
   assert.deepEqual(parseVoiceIntent("status do job 7"), { type: "job.status", id: 7 });
+  assert.deepEqual(parseVoiceIntent("status da demanda 7"), { type: "job.status", id: 7 });
   assert.deepEqual(parseVoiceIntent("status dos jobs"), { type: "job.status", id: null });
+  assert.deepEqual(parseVoiceIntent("listar demandas"), { type: "job.status", id: null });
   assert.equal(parseVoiceIntent("criar tarefa comprar cafe"), null);
 
   const ask = handleVoiceIntent("criar job revisar a arquitetura local");
@@ -21,15 +24,15 @@ try {
   assert.equal(ask.job.requestedBy, "voice");
   assert.equal(ask.job.policyLevel, "read");
   assert.equal(ask.job.status, "draft");
-  assert.match(ask.reply, /Job \d+ criado/);
+  assert.match(ask.reply, /Demanda \d+ criada/);
 
   const status = handleVoiceIntent(`consultar job ${ask.job.id}`);
   assert.equal(status.job.id, ask.job.id);
-  assert.match(status.reply, new RegExp(`Job ${ask.job.id}: draft`));
+  assert.match(status.reply, new RegExp(`Demanda ${ask.job.id}: draft`));
 
   const cancelled = handleVoiceIntent(`cancelar job ${ask.job.id}`);
   assert.equal(cancelled.job.status, "cancelled");
-  assert.match(cancelled.reply, /cancelado/);
+  assert.match(cancelled.reply, /cancelad[ao]/);
 
   const implement = handleVoiceIntent("implementar uma melhoria pequena");
   jobIds.push(implement.job.id);
