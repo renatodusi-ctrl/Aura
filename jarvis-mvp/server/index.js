@@ -175,7 +175,7 @@ async function createJobRoute(req, res) {
     });
     return sendJson(res, 201, { job, events: listJobEvents(job.id) });
   } catch (error) {
-    return sendJson(res, error.statusCode || 400, { error: error.message || "Could not create job." });
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not create job."));
   }
 }
 
@@ -257,6 +257,32 @@ function httpError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function statusForJobError(error) {
+  if (error.statusCode) {
+    return error.statusCode;
+  }
+
+  if (error.code === "WORKSPACE_LOCKED") {
+    return 409;
+  }
+
+  return 400;
+}
+
+function bodyForJobError(error, fallback) {
+  const body = { error: error.message || fallback };
+  if (error.code === "WORKSPACE_LOCKED" && error.lockedBy) {
+    body.lockedBy = {
+      id: error.lockedBy.id,
+      goal: error.lockedBy.goal,
+      workspace: error.lockedBy.workspace,
+      status: error.lockedBy.status,
+      policyLevel: error.lockedBy.policyLevel
+    };
+  }
+  return body;
 }
 
 function localChat(body) {

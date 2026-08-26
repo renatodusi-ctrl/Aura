@@ -41,7 +41,8 @@ Append-only timeline entries for each job.
 - Status transitions should append `job_events`.
 - New jobs start as `draft`.
 - Terminal statuses `done`, `failed` and `cancelled` are final.
-- Future writers must use workspace locks before running.
+- `write` and `git` jobs lock their workspace until they reach `done`, `failed` or `cancelled`.
+- `read` jobs can coexist in the same workspace.
 - Voice may create jobs, but must not confirm sensitive actions by itself.
 - CLI output persisted into job artifacts or events must be redacted before storage.
 
@@ -56,6 +57,8 @@ The job API is orchestration-only. It does not execute external CLIs.
 | `GET /api/jobs/:id` | Read one job with its events. |
 | `GET /api/jobs/:id/events` | Read a job timeline. |
 | `POST /api/jobs/:id/cancel` | Cancel a non-terminal job. |
+
+When a `write` or `git` job already exists in a non-terminal state for a workspace, creating another `write` or `git` job in that same workspace returns `409` with a `lockedBy` summary.
 
 Create payload:
 

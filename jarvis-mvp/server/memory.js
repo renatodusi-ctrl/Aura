@@ -6,6 +6,7 @@ let db;
 const JOB_MODES = new Set(["ask", "analyze", "implement"]);
 const JOB_STATUSES = new Set(["draft", "awaiting_confirm", "queued", "running", "needs_input", "done", "failed", "cancelled"]);
 const POLICY_LEVELS = new Set(["read", "write", "git", "network", "secrets", "destructive"]);
+const WRITER_POLICY_LEVELS = new Set(["write", "git"]);
 const REQUEST_SOURCES = new Set(["text", "voice", "routine"]);
 const TERMINAL_JOB_STATUSES = new Set(["done", "failed", "cancelled"]);
 const JOB_STATUS_TRANSITIONS = new Map([
@@ -216,6 +217,8 @@ export function createJob({
   }
 
   const jobId = withTransaction(() => {
+    assertWorkspaceWriterAvailable(normalized.workspace, normalized.policyLevel);
+
     const result = db.prepare(`
       INSERT INTO jobs (
         goal, workspace, mode, status, requested_by, policy_level,
@@ -263,6 +266,20 @@ export function getJob(id) {
   return job ? formatJob(job) : null;
 }
 
+export function getActiveWorkspaceWriter(workspace, excludeId = null) {
+  const writer = db.prepare(`
+    SELECT ${jobSelectColumns()}
+    FROM jobs
+    WHERE workspace = ?
+      AND policy_level IN ('write', 'git')
+      AND status NOT IN ('done', 'failed', 'cancelled')
+      AND (? IS NULL OR id != ?)
+    ORDER BY id ASC
+    LIMIT 1
+  `).get(String(workspace), excludeId, excludeId);
+  return writer ? formatJob(writer) : null;
+}
+
 export function listJobEvents(jobId) {
   return db.prepare(`
     SELECT
@@ -303,6 +320,10 @@ export function updateJobStatus(id, status, patch = {}) {
   const nextSummary = Object.hasOwn(patch, "summary") ? patch.summary : current.summary;
 
   withTransaction(() => {
+    if (!TERMINAL_JOB_STATUSES.has(status)) {
+      assertWorkspaceWriterAvailable(current.workspace, current.policyLevel, current.id);
+    }
+
     db.prepare(`
       UPDATE jobs
       SET
@@ -408,6 +429,22 @@ function assertJobTransition(from, to) {
     const terminalHint = TERMINAL_JOB_STATUSES.has(from) ? " Terminal job statuses cannot transition." : "";
     throw new Error(`Invalid job status transition: ${from} -> ${to}.${terminalHint}`);
   }
+}
+
+function assertWorkspaceWriterAvailable(workspace, policyLevel, excludeId = null) {
+  if (!WRITER_POLICY_LEVELS.has(policyLevel)) {
+    return;
+  }
+
+  const lockedBy = getActiveWorkspaceWriter(workspace, excludeId);
+  if (!lockedBy) {
+    return;
+  }
+
+  const error = new Error(`Workspace is locked by writer job ${lockedBy.id}: ${workspace}`);
+  error.code = "WORKSPACE_LOCKED";
+  error.lockedBy = lockedBy;
+  throw error;
 }
 
 function withTransaction(callback) {

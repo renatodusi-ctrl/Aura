@@ -59,6 +59,52 @@ try {
   assert.ok(events.length >= 4);
   assert.equal(typeof events[0].data, "object");
 
+  const readOne = createJob({
+    goal: "Verify read one",
+    workspace: process.cwd(),
+    policyLevel: "read"
+  });
+  const readTwo = createJob({
+    goal: "Verify read two",
+    workspace: process.cwd(),
+    policyLevel: "read"
+  });
+  jobIds.push(readOne.id, readTwo.id);
+  assert.equal(readOne.policyLevel, "read");
+  assert.equal(readTwo.policyLevel, "read");
+
+  const writer = createJob({
+    goal: "Verify writer lock",
+    workspace: process.cwd(),
+    mode: "implement",
+    policyLevel: "write",
+    requiresConfirmation: true
+  });
+  jobIds.push(writer.id);
+
+  assert.throws(
+    () => createJob({
+      goal: "Verify second writer blocked",
+      workspace: process.cwd(),
+      mode: "implement",
+      policyLevel: "write",
+      requiresConfirmation: true
+    }),
+    /Workspace is locked by writer job/
+  );
+
+  updateJobStatus(writer.id, "cancelled", { summary: "Release writer lock." });
+
+  const writerAfterRelease = createJob({
+    goal: "Verify writer after release",
+    workspace: process.cwd(),
+    mode: "implement",
+    policyLevel: "write",
+    requiresConfirmation: true
+  });
+  jobIds.push(writerAfterRelease.id);
+  updateJobStatus(writerAfterRelease.id, "cancelled", { summary: "Cleanup writer lock." });
+
   console.log("Job kernel verification passed.");
 } finally {
   const cleanup = new DatabaseSync(config.databasePath);
