@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AURA Cockpit</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Assistente local</p>
+          <h1>AURA</h1>
+        </div>
+        <div class="status">
+          <span id="realtime-pill" class="pill">Inicializando</span>
+          <span id="db-pill" class="pill">SQLite</span>
+        </div>
+      </header>
+
+      <section class="cockpit">
+        <div class="voice-panel">
+          <div class="panel-header">
+            <div>
+              <h2>Conversa</h2>
+              <p>Voz em tempo real quando houver chave; comando local quando nao houver.</p>
+            </div>
+            <button id="voice-button" class="primary" type="button" data-connected="false">Conectar voz</button>
+          </div>
+
+          <div id="conversation" class="conversation" aria-live="polite"></div>
+
+          <form id="local-form" class="composer">
+            <input id="local-input" type="text" autocomplete="off" placeholder="Digite ou fale: guardar..., tarefa..., bom dia...">
+            <button type="submit">Enviar</button>
+          </form>
+        </div>
+
+        <aside class="side-panel">
+          <section>
+            <div class="section-row">
+              <h2>Rotina</h2>
+              <label class="toggle">
+                <input id="routine-toggle" type="checkbox">
+                <span></span>
+              </label>
+            </div>
+            <p id="routine-panel" class="routine"></p>
+          </section>
+
+          <section>
+            <div class="section-row">
+              <h2>Tela</h2>
+              <button id="screen-button" type="button">Capturar</button>
+            </div>
+            <video id="screen-video" autoplay muted playsinline hidden></video>
+            <button id="stop-screen-button" class="secondary" type="button" hidden>Parar captura</button>
+          </section>
+        </aside>
+      </section>
+
+      <section class="workspace">
+        <div class="panel">
+          <h2>Tarefas</h2>
+          <form id="task-form" class="inline-form">
+            <input id="task-input" type="text" placeholder="Nova tarefa">
+            <button type="submit">Adicionar</button>
+          </form>
+          <ul id="task-list" class="list"></ul>
+        </div>
+
+        <div class="panel">
+          <h2>Memoria</h2>
+          <form id="memory-form" class="inline-form">
+            <input id="memory-input" type="text" placeholder="Guardar memoria local">
+            <button type="submit">Guardar</button>
+          </form>
+          <ul id="memory-list" class="list"></ul>
+        </div>
+
+        <div class="panel">
+          <h2>Ferramentas</h2>
+          <ul id="tools-list" class="tools"></ul>
+          <h2>Eventos</h2>
+          <ul id="event-log" class="events"></ul>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

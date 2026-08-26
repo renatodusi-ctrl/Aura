@@ -1,0 +1,23 @@
+{
+  "name": "aura-jarvis-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AURA local voice cockpit with OpenAI Realtime/WebRTC and local fallback.",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "verify": "node --check server/index.js && node --check server/config.js && node --check server/memory.js && node --check server/tools.js"
+  },
+  "keywords": [
+    "aura",
+    "realtime",
+    "webrtc",
+    "sqlite",
+    "voice-assistant"
+  ],
+  "license": "UNLICENSED"
+}
