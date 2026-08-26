@@ -44,3 +44,31 @@ Append-only timeline entries for each job.
 - Future writers must use workspace locks before running.
 - Voice may create jobs, but must not confirm sensitive actions by itself.
 - CLI output persisted into job artifacts or events must be redacted before storage.
+
+## Local API
+
+The job API is orchestration-only. It does not execute external CLIs.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/jobs?limit=50` | List recent jobs. |
+| `POST /api/jobs` | Create a draft job. |
+| `GET /api/jobs/:id` | Read one job with its events. |
+| `GET /api/jobs/:id/events` | Read a job timeline. |
+| `POST /api/jobs/:id/cancel` | Cancel a non-terminal job. |
+
+Create payload:
+
+```json
+{
+  "goal": "Review the AURA architecture",
+  "workspace": "/path/to/workspace",
+  "mode": "ask",
+  "requestedBy": "text",
+  "policyLevel": "read",
+  "timeoutMs": 300000,
+  "metadata": {}
+}
+```
+
+If `workspace` is omitted, AURA uses its local project directory. `secrets` and `destructive` policy levels are blocked at creation until the central policy engine exists.

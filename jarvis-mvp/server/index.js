@@ -3,7 +3,21 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config, ensureRuntime, ROOT_DIR } from "./config.js";
-import { getStatus, initMemory, listMemories, addMemory, listTasks, addTask, updateTask, deleteTask } from "./memory.js";
+import {
+  getStatus,
+  initMemory,
+  listMemories,
+  addMemory,
+  listTasks,
+  addTask,
+  updateTask,
+  deleteTask,
+  createJob,
+  getJob,
+  listJobEvents,
+  listJobs,
+  updateJobStatus
+} from "./memory.js";
 import { getLocalContext, listTools, runTool } from "./tools.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -57,6 +71,35 @@ async function route(req, res) {
     return sendJson(res, 200, getLocalContext());
   }
 
+  if (url.pathname === "/api/jobs" && method === "GET") {
+    return sendJson(res, 200, { jobs: listJobs(limitFromQuery(url, 50)) });
+  }
+
+  if (url.pathname === "/api/jobs" && method === "POST") {
+    return createJobRoute(req, res);
+  }
+
+  const jobRoute = matchJobRoute(url.pathname);
+  if (jobRoute && method === "GET" && !jobRoute.action) {
+    const job = getJob(jobRoute.id);
+    if (!job) {
+      return sendJson(res, 404, { error: "Job not found." });
+    }
+    return sendJson(res, 200, { job, events: listJobEvents(job.id) });
+  }
+
+  if (jobRoute && method === "GET" && jobRoute.action === "events") {
+    const job = getJob(jobRoute.id);
+    if (!job) {
+      return sendJson(res, 404, { error: "Job not found." });
+    }
+    return sendJson(res, 200, { events: listJobEvents(job.id) });
+  }
+
+  if (jobRoute && method === "POST" && jobRoute.action === "cancel") {
+    return cancelJobRoute(jobRoute.id, res);
+  }
+
   if (url.pathname === "/api/memories" && method === "GET") {
     return sendJson(res, 200, { memories: listMemories() });
   }
@@ -106,6 +149,95 @@ async function route(req, res) {
   }
 
   return serveStatic(url.pathname, res);
+}
+
+async function createJobRoute(req, res) {
+  try {
+    const body = await readJson(req);
+    const workspace = resolveWorkspace(body.workspace);
+    const mode = body.mode || "ask";
+    const policyLevel = body.policyLevel || (mode === "implement" ? "write" : "read");
+
+    assertPolicyAllowed(policyLevel);
+
+    const job = createJob({
+      goal: body.goal,
+      workspace,
+      mode,
+      requestedBy: body.requestedBy || "text",
+      policyLevel,
+      requiresConfirmation: Boolean(body.requiresConfirmation ?? policyLevel !== "read"),
+      timeoutMs: body.timeoutMs || 300000,
+      metadata: body.metadata || {}
+    });
+    return sendJson(res, 201, { job, events: listJobEvents(job.id) });
+  } catch (error) {
+    return sendJson(res, error.statusCode || 400, { error: error.message || "Could not create job." });
+  }
+}
+
+function cancelJobRoute(id, res) {
+  try {
+    const job = getJob(id);
+    if (!job) {
+      return sendJson(res, 404, { error: "Job not found." });
+    }
+
+    const cancelled = updateJobStatus(job.id, "cancelled", {
+      summary: "Job cancelled before execution."
+    });
+    return sendJson(res, 200, { job: cancelled, events: listJobEvents(job.id) });
+  } catch (error) {
+    return sendJson(res, 409, { error: error.message || "Could not cancel job." });
+  }
+}
+
+function resolveWorkspace(workspace = ROOT_DIR) {
+  const resolved = path.resolve(String(workspace || ROOT_DIR));
+  let stat;
+
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    throw httpError(400, `Workspace does not exist: ${resolved}`);
+  }
+
+  if (!stat.isDirectory()) {
+    throw httpError(400, `Workspace is not a directory: ${resolved}`);
+  }
+
+  return resolved;
+}
+
+function assertPolicyAllowed(policyLevel) {
+  if (["secrets", "destructive"].includes(policyLevel)) {
+    throw httpError(403, `Policy level is blocked for job creation: ${policyLevel}`);
+  }
+}
+
+function matchJobRoute(pathname) {
+  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel))?$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    id: Number(match[1]),
+    action: match[2] || null
+  };
+}
+
+function limitFromQuery(url, fallback) {
+  const value = Number.parseInt(url.searchParams.get("limit") || "", 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    return fallback;
+  }
+  return Math.min(value, 200);
+}
+
+function httpError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 }
 
 function localChat(body) {
