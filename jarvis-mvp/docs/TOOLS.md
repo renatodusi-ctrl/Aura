@@ -2,6 +2,8 @@
 
 Tools live in `server/tools.js`.
 
+Tool confirmation is driven by the central policy model in `server/policy.js`.
+
 ## Safe by Default
 
 - `memory.add`

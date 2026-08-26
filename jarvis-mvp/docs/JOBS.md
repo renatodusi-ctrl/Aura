@@ -45,6 +45,7 @@ Append-only timeline entries for each job.
 - `read` jobs can coexist in the same workspace.
 - Voice may create jobs, but must not confirm sensitive actions by itself.
 - CLI output persisted into job artifacts or events must be redacted before storage.
+- Job policy decisions are defined in `docs/POLICY.md`.
 
 ## Local API
 
@@ -74,4 +75,4 @@ Create payload:
 }
 ```
 
-If `workspace` is omitted, AURA uses its local project directory. `secrets` and `destructive` policy levels are blocked at creation until the central policy engine exists.
+If `workspace` is omitted, AURA uses its local project directory. Policy behavior is defined in `docs/POLICY.md`.

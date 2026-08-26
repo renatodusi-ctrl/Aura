@@ -19,6 +19,7 @@ import {
   updateJobStatus
 } from "./memory.js";
 import { getLocalContext, listTools, runTool } from "./tools.js";
+import { evaluateJobPolicy, normalizePolicyLevel, POLICY_LEVELS } from "./policy.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,8 +36,6 @@ const contentTypes = {
 };
 
 const JOB_API_MODES = new Set(["ask", "analyze", "implement"]);
-const JOB_API_POLICY_LEVELS = new Set(["read", "write", "git", "network", "secrets", "destructive"]);
-
 ensureRuntime();
 initMemory();
 
@@ -160,8 +159,7 @@ async function createJobRoute(req, res) {
     const workspace = resolveWorkspace(body.workspace);
     const mode = normalizeJobMode(body.mode || "ask");
     const policyLevel = normalizeJobPolicyLevel(body.policyLevel || (mode === "implement" ? "write" : "read"));
-
-    assertPolicyAllowed(policyLevel);
+    const policy = evaluateJobPolicy(policyLevel);
 
     const job = createJob({
       goal: body.goal,
@@ -169,11 +167,30 @@ async function createJobRoute(req, res) {
       mode,
       requestedBy: body.requestedBy || "text",
       policyLevel,
-      requiresConfirmation: Boolean(body.requiresConfirmation ?? policyLevel !== "read"),
+      requiresConfirmation: policy.requiresConfirmation,
       timeoutMs: body.timeoutMs || 300000,
-      metadata: body.metadata || {}
+      metadata: {
+        ...(body.metadata || {}),
+        policy: {
+          confirmationType: policy.confirmationType,
+          reason: policy.reason
+        }
+      }
     });
-    return sendJson(res, 201, { job, events: listJobEvents(job.id) });
+
+    let finalJob = job;
+    let status = 201;
+    if (policy.status === "awaiting_confirm") {
+      finalJob = updateJobStatus(job.id, "awaiting_confirm", { summary: policy.reason });
+      status = 202;
+    }
+
+    if (policy.status === "failed") {
+      finalJob = updateJobStatus(job.id, "failed", { error: policy.reason, summary: policy.reason });
+      status = 403;
+    }
+
+    return sendJson(res, status, { job: finalJob, events: listJobEvents(job.id), policy });
   } catch (error) {
     return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not create job."));
   }
@@ -212,12 +229,6 @@ function resolveWorkspace(workspace = ROOT_DIR) {
   return resolved;
 }
 
-function assertPolicyAllowed(policyLevel) {
-  if (["secrets", "destructive"].includes(policyLevel)) {
-    throw httpError(403, `Policy level is blocked for job creation: ${policyLevel}`);
-  }
-}
-
 function normalizeJobMode(mode) {
   const normalized = String(mode || "ask");
   if (!JOB_API_MODES.has(normalized)) {
@@ -227,11 +238,11 @@ function normalizeJobMode(mode) {
 }
 
 function normalizeJobPolicyLevel(policyLevel) {
-  const normalized = String(policyLevel || "read");
-  if (!JOB_API_POLICY_LEVELS.has(normalized)) {
-    throw httpError(400, `Invalid job policy level: ${normalized}.`);
+  try {
+    return normalizePolicyLevel(policyLevel || "read");
+  } catch {
+    throw httpError(400, `Invalid job policy level: ${policyLevel}. Use ${POLICY_LEVELS.join(", ")}.`);
   }
-  return normalized;
 }
 
 function matchJobRoute(pathname) {

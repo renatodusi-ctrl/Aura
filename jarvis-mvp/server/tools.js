@@ -8,25 +8,26 @@ import {
   recordToolRun,
   updateTask
 } from "./memory.js";
+import { evaluateToolPolicy } from "./policy.js";
 
 const safeTools = new Map([
   ["memory.add", {
-    requiresConfirmation: false,
+    policyLevel: "read",
     description: "Save a local memory note.",
     run: ({ kind, content }) => addMemory({ kind, content })
   }],
   ["tasks.add", {
-    requiresConfirmation: false,
+    policyLevel: "read",
     description: "Create a persistent task.",
     run: ({ title, dueAt }) => addTask({ title, dueAt })
   }],
   ["tasks.complete", {
-    requiresConfirmation: false,
+    policyLevel: "read",
     description: "Mark a task as complete.",
     run: ({ id }) => updateTask(id, { status: "done" })
   }],
   ["tasks.reopen", {
-    requiresConfirmation: false,
+    policyLevel: "read",
     description: "Reopen a completed task.",
     run: ({ id }) => updateTask(id, { status: "open" })
   }]
@@ -34,17 +35,17 @@ const safeTools = new Map([
 
 const confirmationTools = new Map([
   ["memory.delete", {
-    requiresConfirmation: true,
+    policyLevel: "destructive",
     description: "Delete a local memory note.",
     run: ({ id }) => deleteMemory(id)
   }],
   ["tasks.delete", {
-    requiresConfirmation: true,
+    policyLevel: "destructive",
     description: "Delete a persistent task.",
     run: ({ id }) => deleteTask(id)
   }],
   ["screen.capture.intent", {
-    requiresConfirmation: true,
+    policyLevel: "network",
     description: "Request opt-in browser screen capture from the user.",
     run: () => ({ nextAction: "browser-getDisplayMedia", message: "Screen capture must be accepted in the browser." })
   }]
@@ -54,7 +55,8 @@ export function listTools() {
   return [...safeTools, ...confirmationTools].map(([name, tool]) => ({
     name,
     description: tool.description,
-    requiresConfirmation: tool.requiresConfirmation
+    policyLevel: tool.policyLevel,
+    requiresConfirmation: evaluateToolPolicy(tool.policyLevel).requiresConfirmation
   }));
 }
 
@@ -64,13 +66,16 @@ export function runTool(name, input = {}, confirmed = false) {
     throw new Error(`Unknown tool: ${name}`);
   }
 
-  if (tool.requiresConfirmation && !confirmed) {
+  const policy = evaluateToolPolicy(tool.policyLevel);
+  if (policy.requiresConfirmation && !confirmed) {
     recordToolRun(name, "needs_confirmation", input, {});
     return {
       needsConfirmation: true,
       tool: {
         name,
         description: tool.description,
+        policyLevel: policy.policyLevel,
+        confirmationType: policy.confirmationType,
         input
       }
     };
