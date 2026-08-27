@@ -1,4 +1,4 @@
-import { ROOT_DIR } from "./config.js";
+import { config, ROOT_DIR } from "./config.js";
 import { createJob, getJob, listJobs, updateJobStatus } from "./memory.js";
 import { evaluateJobPolicy } from "./policy.js";
 import { cancelJobProcess } from "./supervisor.js";
@@ -78,7 +78,7 @@ function createJobFromVoice(intent) {
     requestedBy: "voice",
     policyLevel,
     requiresConfirmation: policy.requiresConfirmation,
-    timeoutMs: 300000,
+    timeoutMs: mode === "implement" ? config.codexTimeoutMs : config.jobTimeoutMs,
     metadata: {
       voice: {
         source: "local-intent",

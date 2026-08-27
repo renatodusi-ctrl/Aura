@@ -20,8 +20,16 @@ const DEFAULT_ANALYSTS = Object.freeze({
     bin: "grok",
     versionArgs: ["--version"],
     args: (prompt) => ["-p", prompt, "--permission-mode", "plan", "--disable-web-search", "--no-subagents", "--max-turns", "1", "--output-format", "plain"]
+  },
+  openrouter: {
+    binEnv: "AURA_OPENROUTER_BIN",
+    bin: "openrouter",
+    versionArgs: ["-v"],
+    args: (prompt) => ["code", prompt]
   }
 });
+
+const ANALYST_NAMES = Object.freeze(Object.keys(DEFAULT_ANALYSTS));
 
 export function buildEvidenceBrief(job, context = {}) {
   const files = Array.isArray(context.files) ? context.files : [];
@@ -105,7 +113,7 @@ export async function runAnalysts({
   }
   assertAnalyzeJob(job);
 
-  const selected = ["gemini", "grok"].filter((name) => consent[name] === true);
+  const selected = ANALYST_NAMES.filter((name) => consent[name] === true);
   if (!selected.length) {
     throw new Error("At least one analyst destination must be explicitly approved.");
   }
@@ -237,7 +245,12 @@ function analystConfig(name) {
 }
 
 function displayName(name) {
-  return name === "grok" ? "Grok" : "Gemini";
+  const labels = {
+    gemini: "Gemini",
+    grok: "Grok",
+    openrouter: "OpenRouter"
+  };
+  return labels[name] || name;
 }
 
 function parseJsonObject(text) {

@@ -21,6 +21,44 @@ const JOB_STATUS_TRANSITIONS = new Map([
   ["cancelled", new Set()]
 ]);
 
+const COST_RATES_USD_PER_MILLION = {
+  openai: {
+    "gpt-realtime-2.1": {
+      textInput: 4,
+      textCachedInput: 0.4,
+      textOutput: 24,
+      audioInput: 32,
+      audioCachedInput: 0.4,
+      audioOutput: 64,
+      imageInput: 5,
+      imageCachedInput: 0.5
+    },
+    "gpt-realtime-2.1-mini": {
+      textInput: 0.6,
+      textCachedInput: 0.06,
+      textOutput: 2.4,
+      audioInput: 10,
+      audioCachedInput: 0.3,
+      audioOutput: 20,
+      imageInput: 0.8,
+      imageCachedInput: 0.08
+    }
+  }
+};
+
+const TOKEN_USAGE_KEYS = [
+  "textInputTokens",
+  "textCachedInputTokens",
+  "textOutputTokens",
+  "audioInputTokens",
+  "audioCachedInputTokens",
+  "audioOutputTokens",
+  "imageInputTokens",
+  "imageCachedInputTokens",
+  "rawInputTokens",
+  "rawOutputTokens"
+];
+
 export function initMemory() {
   db = new DatabaseSync(config.databasePath);
   db.exec(`
@@ -99,10 +137,24 @@ export function initMemory() {
       FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS cost_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      key_label TEXT NOT NULL,
+      model TEXT NOT NULL,
+      source TEXT NOT NULL,
+      operation TEXT NOT NULL DEFAULT 'unknown',
+      usage TEXT NOT NULL DEFAULT '{}',
+      estimated_cost_usd REAL,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
     CREATE INDEX IF NOT EXISTS idx_jobs_workspace ON jobs(workspace);
     CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id, id);
     CREATE INDEX IF NOT EXISTS idx_job_artifacts_job_id ON job_artifacts(job_id, id);
+    CREATE INDEX IF NOT EXISTS idx_cost_usage_provider ON cost_usage(provider, model, created_at);
   `);
 }
 
@@ -159,6 +211,14 @@ export function listTasks(includeDone = true) {
   return db.prepare(query).all();
 }
 
+export function getTask(id) {
+  return db.prepare(`
+    SELECT id, title, status, due_at AS dueAt, created_at AS createdAt, updated_at AS updatedAt, completed_at AS completedAt
+    FROM tasks
+    WHERE id = ?
+  `).get(Number(id)) || null;
+}
+
 export function addTask({ title, dueAt = null }) {
   const text = String(title || "").trim();
   if (!text) {
@@ -210,6 +270,279 @@ export function recordToolRun(name, status, input, output) {
     JSON.stringify(redactObject(input || {})),
     JSON.stringify(redactObject(output || {}))
   );
+}
+
+export function recordCostUsage({
+  provider,
+  keyLabel,
+  model,
+  source,
+  operation = "unknown",
+  usage = {},
+  estimatedCostUsd,
+  metadata = {}
+}) {
+  const normalizedUsage = normalizeCostUsage(usage);
+  const normalizedMetadata = redactObject(normalizeJsonObject(metadata, "Cost metadata"));
+  const cost = normalizeEstimatedCost(estimatedCostUsd) ?? estimateCostUsd(provider, model, normalizedUsage);
+  const result = db.prepare(`
+    INSERT INTO cost_usage (
+      provider, key_label, model, source, operation, usage, estimated_cost_usd, metadata
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    String(provider || "unknown"),
+    String(keyLabel || "unknown"),
+    String(model || "unknown"),
+    String(source || "unknown"),
+    String(operation || "unknown"),
+    JSON.stringify(normalizedUsage),
+    cost,
+    JSON.stringify(normalizedMetadata)
+  );
+
+  return getCostUsage(result.lastInsertRowid);
+}
+
+export function getCostSummary(limit = 50) {
+  const rows = db.prepare(`
+    SELECT
+      id,
+      provider,
+      key_label AS keyLabel,
+      model,
+      source,
+      operation,
+      usage,
+      estimated_cost_usd AS estimatedCostUsd,
+      metadata,
+      created_at AS createdAt
+    FROM cost_usage
+    ORDER BY id DESC
+  `).all().map(formatCostUsage);
+
+  const recent = rows.slice(0, limit);
+  const usageTotals = sumUsage(rows);
+
+  const totals = {
+    estimatedCostUsd: sumCost(rows),
+    measuredEvents: rows.length,
+    unpricedEvents: rows.filter((row) => row.estimatedCostUsd === null || row.estimatedCostUsd === undefined).length,
+    tokens: totalTokensFromUsage(usageTotals),
+    inputTokens: inputTokensFromUsage(usageTotals),
+    outputTokens: outputTokensFromUsage(usageTotals)
+  };
+
+  return {
+    currency: "USD",
+    totals,
+    byProvider: costGroupsFromRows(rows, (row) => row.provider),
+    byModel: costGroupsFromRows(rows, (row) => `${row.provider} · ${row.model}`),
+    byOperation: costGroupsFromRows(rows, (row) => row.operation),
+    tokenBreakdown: tokenBreakdown(rows),
+    tokenSeries: costSeries(rows),
+    recent,
+    pricing: publicCostRates()
+  };
+}
+
+function getCostUsage(id) {
+  const row = db.prepare(`
+    SELECT
+      id,
+      provider,
+      key_label AS keyLabel,
+      model,
+      source,
+      operation,
+      usage,
+      estimated_cost_usd AS estimatedCostUsd,
+      metadata,
+      created_at AS createdAt
+    FROM cost_usage
+    WHERE id = ?
+  `).get(Number(id));
+  return row ? formatCostUsage(row) : null;
+}
+
+function formatCostUsage(row) {
+  return {
+    ...row,
+    usage: parseJson(row.usage, {}),
+    metadata: parseJson(row.metadata, {})
+  };
+}
+
+function normalizeCostUsage(usage) {
+  const value = normalizeJsonObject(usage || {}, "Cost usage");
+  return {
+    textInputTokens: numberFromUsage(value.textInputTokens ?? value.inputTextTokens),
+    textCachedInputTokens: numberFromUsage(value.textCachedInputTokens ?? value.cachedTextInputTokens),
+    textOutputTokens: numberFromUsage(value.textOutputTokens ?? value.outputTextTokens),
+    audioInputTokens: numberFromUsage(value.audioInputTokens ?? value.inputAudioTokens),
+    audioCachedInputTokens: numberFromUsage(value.audioCachedInputTokens ?? value.cachedAudioInputTokens),
+    audioOutputTokens: numberFromUsage(value.audioOutputTokens ?? value.outputAudioTokens),
+    imageInputTokens: numberFromUsage(value.imageInputTokens ?? value.inputImageTokens),
+    imageCachedInputTokens: numberFromUsage(value.imageCachedInputTokens ?? value.cachedImageInputTokens),
+    rawInputTokens: numberFromUsage(value.rawInputTokens ?? value.inputTokens),
+    rawOutputTokens: numberFromUsage(value.rawOutputTokens ?? value.outputTokens)
+  };
+}
+
+function normalizeEstimatedCost(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Number(number.toFixed(8)) : null;
+}
+
+function costGroupsFromRows(rows, labelForRow) {
+  const groups = new Map();
+  for (const row of rows) {
+    const label = String(labelForRow(row) || "unknown");
+    const current = groups.get(label) || {
+      label,
+      estimatedCostUsd: 0,
+      events: 0,
+      tokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      unpricedEvents: 0
+    };
+    current.estimatedCostUsd += Number(row.estimatedCostUsd || 0);
+    current.events += 1;
+    current.inputTokens += inputTokensFromUsage(row.usage);
+    current.outputTokens += outputTokensFromUsage(row.usage);
+    current.tokens += totalTokensFromUsage(row.usage);
+    if (row.estimatedCostUsd === null || row.estimatedCostUsd === undefined) {
+      current.unpricedEvents += 1;
+    }
+    groups.set(label, current);
+  }
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      estimatedCostUsd: Number(group.estimatedCostUsd.toFixed(8))
+    }))
+    .sort((left, right) => (
+      right.estimatedCostUsd - left.estimatedCostUsd ||
+      right.tokens - left.tokens ||
+      right.events - left.events ||
+      left.label.localeCompare(right.label)
+    ));
+}
+
+function tokenBreakdown(rows) {
+  const totals = sumUsage(rows);
+  const detailedInput = totals.textInputTokens + totals.textCachedInputTokens + totals.audioInputTokens + totals.audioCachedInputTokens + totals.imageInputTokens + totals.imageCachedInputTokens;
+  const detailedOutput = totals.textOutputTokens + totals.audioOutputTokens;
+  const items = [
+    ["Texto entrada", totals.textInputTokens],
+    ["Texto cache", totals.textCachedInputTokens],
+    ["Texto saida", totals.textOutputTokens],
+    ["Audio entrada", totals.audioInputTokens],
+    ["Audio cache", totals.audioCachedInputTokens],
+    ["Audio saida", totals.audioOutputTokens],
+    ["Imagem entrada", totals.imageInputTokens],
+    ["Imagem cache", totals.imageCachedInputTokens]
+  ];
+  if (!detailedInput && totals.rawInputTokens) {
+    items.push(["Entrada bruta", totals.rawInputTokens]);
+  }
+  if (!detailedOutput && totals.rawOutputTokens) {
+    items.push(["Saida bruta", totals.rawOutputTokens]);
+  }
+  return items
+    .filter(([, tokens]) => tokens > 0)
+    .map(([label, tokens]) => ({ label, tokens }));
+}
+
+function costSeries(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const day = String(row.createdAt || "").slice(0, 10) || "sem data";
+    const current = groups.get(day) || {
+      label: day,
+      estimatedCostUsd: 0,
+      tokens: 0,
+      events: 0
+    };
+    current.estimatedCostUsd += Number(row.estimatedCostUsd || 0);
+    current.tokens += totalTokensFromUsage(row.usage);
+    current.events += 1;
+    groups.set(day, current);
+  }
+  return Array.from(groups.values())
+    .map((item) => ({ ...item, estimatedCostUsd: Number(item.estimatedCostUsd.toFixed(8)) }))
+    .sort((left, right) => left.label.localeCompare(right.label))
+    .slice(-14);
+}
+
+function sumUsage(rows) {
+  const totals = Object.fromEntries(TOKEN_USAGE_KEYS.map((key) => [key, 0]));
+  for (const row of rows) {
+    for (const key of TOKEN_USAGE_KEYS) {
+      totals[key] += numberFromUsage(row.usage?.[key]);
+    }
+  }
+  return totals;
+}
+
+function sumCost(rows) {
+  const total = rows.reduce((sum, row) => sum + Number(row.estimatedCostUsd || 0), 0);
+  return Number(total.toFixed(8));
+}
+
+function totalTokensFromUsage(usage = {}) {
+  return inputTokensFromUsage(usage) + outputTokensFromUsage(usage);
+}
+
+function inputTokensFromUsage(usage = {}) {
+  const detailed =
+    numberFromUsage(usage.textInputTokens) +
+    numberFromUsage(usage.textCachedInputTokens) +
+    numberFromUsage(usage.audioInputTokens) +
+    numberFromUsage(usage.audioCachedInputTokens) +
+    numberFromUsage(usage.imageInputTokens) +
+    numberFromUsage(usage.imageCachedInputTokens);
+  return detailed || numberFromUsage(usage.rawInputTokens);
+}
+
+function outputTokensFromUsage(usage = {}) {
+  const detailed =
+    numberFromUsage(usage.textOutputTokens) +
+    numberFromUsage(usage.audioOutputTokens);
+  return detailed || numberFromUsage(usage.rawOutputTokens);
+}
+
+function estimateCostUsd(provider, model, usage) {
+  const rates = COST_RATES_USD_PER_MILLION[String(provider || "").toLowerCase()]?.[String(model || "")];
+  if (!rates) {
+    return null;
+  }
+  const total =
+    usage.textInputTokens * rates.textInput +
+    usage.textCachedInputTokens * rates.textCachedInput +
+    usage.textOutputTokens * rates.textOutput +
+    usage.audioInputTokens * rates.audioInput +
+    usage.audioCachedInputTokens * rates.audioCachedInput +
+    usage.audioOutputTokens * rates.audioOutput +
+    usage.imageInputTokens * rates.imageInput +
+    usage.imageCachedInputTokens * rates.imageCachedInput;
+  return Number((total / 1_000_000).toFixed(8));
+}
+
+function publicCostRates() {
+  return Object.entries(COST_RATES_USD_PER_MILLION).flatMap(([provider, models]) => (
+    Object.entries(models).map(([model, rates]) => ({ provider, model, unit: "USD por 1M tokens", rates }))
+  ));
+}
+
+function numberFromUsage(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
 export function createJob({

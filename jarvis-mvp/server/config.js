@@ -40,11 +40,17 @@ export const config = {
   host: process.env.HOST || "127.0.0.1",
   port: intFromEnv("PORT", 5173),
   openaiApiKey: process.env.OPENAI_API_KEY || "",
+  geminiApiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENAI_API_KEY || "",
+  voiceProvider: (process.env.VOICE_PROVIDER || "openai").toLowerCase(),
   realtimeModel: process.env.REALTIME_MODEL || "gpt-realtime-2.1",
-  realtimeVoice: process.env.REALTIME_VOICE || "marin",
+  realtimeVoice: process.env.REALTIME_VOICE || "cedar",
+  geminiLiveModel: process.env.GEMINI_LIVE_MODEL || "gemini-3.1-flash-live-preview",
+  geminiLiveVoice: process.env.GEMINI_LIVE_VOICE || "Vindemiatrix",
   dailyRoutineHour: intFromEnv("DAILY_ROUTINE_HOUR", 8),
   jobHistoryRetentionDays: intFromEnv("JOB_HISTORY_RETENTION_DAYS", 90),
   jobExportDir: process.env.JOB_EXPORT_DIR || EXPORT_DIR,
+  jobTimeoutMs: intFromEnv("JOB_TIMEOUT_MS", 300000),
+  codexTimeoutMs: intFromEnv("CODEX_TIMEOUT_MS", 900000),
   databasePath: path.join(DATA_DIR, "aura.sqlite")
 };
 

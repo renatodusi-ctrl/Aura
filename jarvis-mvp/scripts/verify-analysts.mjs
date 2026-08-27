@@ -15,6 +15,7 @@ const tempDirs = [];
 try {
   const fakeGemini = createFakeAnalyst("gemini");
   const fakeGrok = createFakeAnalyst("grok");
+  const fakeOpenRouter = createFakeAnalyst("openrouter");
 
   const geminiDetection = await detectAnalyst("gemini", { bin: fakeGemini });
   assert.equal(geminiDetection.available, true);
@@ -23,6 +24,10 @@ try {
   const grokDetection = await detectAnalyst("grok", { bin: fakeGrok });
   assert.equal(grokDetection.available, true);
   assert.equal(grokDetection.version, "grok fake");
+
+  const openRouterDetection = await detectAnalyst("openrouter", { bin: fakeOpenRouter });
+  assert.equal(openRouterDetection.available, true);
+  assert.equal(openRouterDetection.version, "openrouter fake");
 
   const normalized = normalizeAnalystResponse(JSON.stringify({
     findings: ["finding"],
@@ -56,19 +61,19 @@ try {
   const output = await runAnalysts({
     jobId: job.id,
     context,
-    consent: { gemini: true, grok: true },
-    bins: { gemini: fakeGemini, grok: fakeGrok },
+    consent: { gemini: true, grok: true, openrouter: true },
+    bins: { gemini: fakeGemini, grok: fakeGrok, openrouter: fakeOpenRouter },
     timeoutMs: 5000
   });
 
   assert.equal(output.job.status, "done");
-  assert.equal(output.analysts.length, 2);
+  assert.equal(output.analysts.length, 3);
   assert.ok(output.analysts.every((entry) => entry.response.findings.length));
   assert.ok(output.analysts.every((entry) => entry.response.confidence === "medium"));
 
   const artifacts = listJobArtifacts(job.id);
   assert.ok(artifacts.some((artifact) => artifact.kind === "evidence-brief" && artifact.content.includes("Verify shared analyst brief")));
-  assert.equal(artifacts.filter((artifact) => artifact.kind === "analyst-response").length, 2);
+  assert.equal(artifacts.filter((artifact) => artifact.kind === "analyst-response").length, 3);
 
   const events = listJobEvents(job.id).map((event) => event.type);
   assert.ok(events.includes("analysts.consent"));
@@ -134,7 +139,8 @@ function createFakeAnalyst(name) {
     fs.writeFileSync(scriptPath, [
       "@echo off",
       `if "%1"=="--version" echo ${name} fake& exit /b 0`,
-      "echo %* | findstr /C:\"approval-mode\" /C:\"permission-mode\" >nul",
+      `if "%1"=="-v" echo ${name} fake& exit /b 0`,
+      "echo %* | findstr /C:\"approval-mode\" /C:\"permission-mode\" /C:\"code\" >nul",
       "if errorlevel 1 exit /b 2",
       `echo ${payload.replaceAll("\"", "\\\"")}`,
       "exit /b 0"
@@ -142,11 +148,11 @@ function createFakeAnalyst(name) {
   } else {
     fs.writeFileSync(scriptPath, [
       "#!/usr/bin/env sh",
-      "if [ \"$1\" = \"--version\" ]; then",
+      "if [ \"$1\" = \"--version\" ] || [ \"$1\" = \"-v\" ]; then",
       `  echo '${name} fake'`,
       "  exit 0",
       "fi",
-      "printf '%s ' \"$@\" | grep -Eq 'approval-mode|permission-mode' || exit 2",
+      "printf '%s ' \"$@\" | grep -Eq 'approval-mode|permission-mode|code' || exit 2",
       `printf '%s\\n' '${payload}'`,
       "exit 0"
     ].join("\n"));

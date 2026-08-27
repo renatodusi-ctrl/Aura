@@ -4,6 +4,7 @@ const state = {
   status: null,
   tasks: [],
   memories: [],
+  costs: null,
   jobs: [],
   selectedJobId: null,
   selectedJob: null,
@@ -12,11 +13,15 @@ const state = {
   events: [],
   demandFilter: "all",
   sessionTab: "tasks",
+  topView: "cockpit",
   composerIntent: "chat",
+  taskExecutor: "codex",
+  attachments: [],
   activeDemandTab: "summary",
   routineEnabled: localStorage.getItem("aura.routineEnabled") === "true",
   screenStream: null,
   realtime: null,
+  recordedRealtimeUsage: new Set(),
   sessionToken: ""
 };
 
@@ -24,15 +29,16 @@ const els = {
   realtimePill: document.querySelector("#realtime-pill"),
   privacyPill: document.querySelector("#privacy-pill"),
   tasksPill: document.querySelector("#tasks-pill"),
-  geminiPill: document.querySelector("#gemini-pill"),
-  grokPill: document.querySelector("#grok-pill"),
-  codexPill: document.querySelector("#codex-pill"),
+  topNextStep: document.querySelector("#top-next-step"),
   routineToggle: document.querySelector("#routine-toggle"),
   voiceButton: document.querySelector("#voice-button"),
   screenButton: document.querySelector("#screen-button"),
   stopScreenButton: document.querySelector("#stop-screen-button"),
   localForm: document.querySelector("#local-form"),
   localInput: document.querySelector("#local-input"),
+  localSubmitButton: document.querySelector("#local-submit-button"),
+  attachmentInput: document.querySelector("#attachment-input"),
+  attachmentTray: document.querySelector("#attachment-tray"),
   composerIntentButtons: Array.from(document.querySelectorAll("[data-composer-intent]")),
   conversation: document.querySelector("#conversation"),
   taskForm: document.querySelector("#task-form"),
@@ -41,7 +47,14 @@ const els = {
   memoryForm: document.querySelector("#memory-form"),
   memoryInput: document.querySelector("#memory-input"),
   memoryList: document.querySelector("#memory-list"),
+  costsRefreshButton: document.querySelector("#costs-refresh-button"),
+  costsPanel: document.querySelector("#costs-panel"),
+  topCostsRefreshButton: document.querySelector("#top-costs-refresh-button"),
+  topCostsPanel: document.querySelector("#top-costs-panel"),
+  topCostPanel: document.querySelector("[data-top-panel='costs']"),
+  topViewButtons: Array.from(document.querySelectorAll("[data-top-view]")),
   jobsRefreshButton: document.querySelector("#jobs-refresh-button"),
+  demandHistorySummary: document.querySelector("#demand-history-summary"),
   demandFilterButtons: Array.from(document.querySelectorAll("[data-demand-filter]")),
   jobList: document.querySelector("#job-list"),
   jobDetail: document.querySelector("#job-detail"),
@@ -52,7 +65,9 @@ const els = {
   eventLog: document.querySelector("#event-log"),
   screenVideo: document.querySelector("#screen-video"),
   routinePanel: document.querySelector("#routine-panel"),
-  toolsList: document.querySelector("#tools-list")
+  toolsList: document.querySelector("#tools-list"),
+  integrationsList: document.querySelector("#integrations-list"),
+  localContextSummary: document.querySelector("#local-context-summary")
 };
 
 init();
@@ -65,10 +80,12 @@ async function init() {
     onEvent: (event) => {
       logEvent(event.type, event);
       if (event.type === "response.done") {
+        recordRealtimeUsage(event).catch((error) => logEvent("cost.usage.failed", { error: error.message }));
         refreshAll();
       }
     },
     onTranscript: appendAssistantDelta,
+    onToolCall: handleRealtimeToolCall,
     sessionToken: () => state.sessionToken
   });
 
@@ -104,11 +121,17 @@ function bindEvents() {
     }
 
     try {
-      appendMessage("system", "Vou abrir o microfone e conectar a voz ao vivo.");
+      appendMessage("system", "Vou abrir o microfone e ficar em standby. Diga Aura para me chamar.");
       await state.realtime.connect();
       els.voiceButton.dataset.connected = "true";
       els.voiceButton.textContent = "Desconectar voz";
     } catch (error) {
+      logEvent("voice.connect.failed", {
+        status: error.status || null,
+        type: error.type || null,
+        code: error.code || null,
+        message: error.message
+      });
       appendMessage("system", `Nao consegui abrir a voz ao vivo porque ${humanizeVoiceError(error)}. Podemos continuar por texto local.`);
       setVoiceStatus("fallback");
     }
@@ -117,27 +140,41 @@ function bindEvents() {
   els.localForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const text = els.localInput.value.trim();
-    if (!text) {
+    const attachments = [...state.attachments];
+    if (!text && !attachments.length) {
+      updateComposerValidation();
       return;
     }
-    els.localInput.value = "";
-    appendMessage("user", text);
+    const messageText = text || "Analise os anexos enviados.";
+    await withBusyButton(els.localSubmitButton, "Enviando", async () => {
+      els.localInput.value = "";
+      clearAttachments();
+      appendMessage("user", messageText, attachments);
 
-    if (state.composerIntent !== "chat") {
-      await createComposerDemand(text);
-      return;
-    }
+      if (state.composerIntent !== "chat") {
+        await createComposerDemand(messageText, attachments);
+        return;
+      }
 
-    if (state.realtime?.sendText(text)) {
-      return;
-    }
+      if (state.realtime?.sendText(messageText, attachments)) {
+        return;
+      }
 
-    const response = await api("/api/local/chat", { method: "POST", body: { text } });
-    appendMessage("assistant", response.reply);
-    if (response.job?.id) {
-      state.selectedJobId = response.job.id;
-    }
-    await refreshAll();
+      const response = await api("/api/local/chat", {
+        method: "POST",
+        body: {
+          text: messageText,
+          attachments: attachments.map(attachmentSummary),
+          activeJob: activeJobSummary()
+        }
+      });
+      appendMessage("assistant", response.reply);
+      if (response.job?.id) {
+        state.selectedJobId = response.job.id;
+      }
+      await refreshAll();
+    });
+    updateComposerValidation();
   });
 
   els.composerIntentButtons.forEach((button) => {
@@ -147,6 +184,15 @@ function bindEvents() {
     });
   });
 
+  els.attachmentInput.addEventListener("change", async () => {
+    await addAttachments(els.attachmentInput.files);
+    els.attachmentInput.value = "";
+  });
+
+  els.localInput.addEventListener("input", updateComposerValidation);
+  els.taskInput.addEventListener("input", () => updateSubmitButton(els.taskForm, Boolean(els.taskInput.value.trim())));
+  els.memoryInput.addEventListener("input", () => updateSubmitButton(els.memoryForm, Boolean(els.memoryInput.value.trim())));
+
   els.taskForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const title = els.taskInput.value.trim();
@@ -154,8 +200,11 @@ function bindEvents() {
       return;
     }
     els.taskInput.value = "";
-    await api("/api/tasks", { method: "POST", body: { title } });
-    await refreshAll();
+    await withBusyButton(els.taskForm.querySelector("button[type='submit']"), "Adicionando", async () => {
+      await api("/api/tasks", { method: "POST", body: { title } });
+      await refreshAll();
+    });
+    updateSubmitButton(els.taskForm, false);
   });
 
   els.memoryForm.addEventListener("submit", async (event) => {
@@ -165,13 +214,27 @@ function bindEvents() {
       return;
     }
     els.memoryInput.value = "";
-    await api("/api/memories", { method: "POST", body: { kind: "note", content } });
-    await refreshAll();
+    await withBusyButton(els.memoryForm.querySelector("button[type='submit']"), "Guardando", async () => {
+      await api("/api/memories", { method: "POST", body: { kind: "note", content } });
+      await refreshAll();
+    });
+    updateSubmitButton(els.memoryForm, false);
   });
 
   els.screenButton.addEventListener("click", startScreenCapture);
   els.stopScreenButton.addEventListener("click", stopScreenCapture);
+  els.costsRefreshButton.addEventListener("click", refreshCosts);
+  els.topCostsRefreshButton.addEventListener("click", refreshCosts);
   els.jobsRefreshButton.addEventListener("click", refreshJobs);
+  els.topViewButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      state.topView = button.dataset.topView;
+      renderTopView();
+      if (state.topView === "costs") {
+        refreshCosts().catch((error) => logEvent("costs.refresh.failed", { error: error.message }));
+      }
+    });
+  });
   els.demandFilterButtons.forEach((button) => {
     button.addEventListener("click", async () => {
       state.demandFilter = button.dataset.demandFilter;
@@ -186,20 +249,25 @@ function bindEvents() {
       renderSessionTabs();
     });
   });
+  updateComposerValidation();
+  updateSubmitButton(els.taskForm, false);
+  updateSubmitButton(els.memoryForm, false);
 }
 
-async function createComposerDemand(text) {
+async function createComposerDemand(text, attachments = []) {
   const mode = state.composerIntent === "execute" ? "implement" : "analyze";
+  const attachmentContext = attachments.length ? `\n\nAnexos: ${attachments.map((attachment) => `${attachment.kind} ${attachment.name}`).join("; ")}` : "";
   try {
     const result = await api("/api/jobs", {
       method: "POST",
       body: {
-        goal: text,
+        goal: `${text}${attachmentContext}`,
         mode,
         requestedBy: "text",
         metadata: {
           source: "composer-intent",
-          intent: state.composerIntent
+          intent: state.composerIntent,
+          attachments: attachments.map(attachmentSummary)
         }
       }
     });
@@ -213,28 +281,139 @@ async function createComposerDemand(text) {
     );
     await refreshAll();
   } catch (error) {
-    appendMessage("system", `Demanda nao criada: ${error.message}`);
+    appendMessage("system", `Demanda nao criada: ${humanizeJobMessage(error.message, error.details)}`);
   }
 }
 
+async function developTask(taskId, executor = "codex", source = "task-action") {
+  try {
+    const result = await api(`/api/tasks/${taskId}/develop`, {
+      method: "POST",
+      body: { source, requestedBy: "text", executor }
+    });
+    state.selectedJobId = result.job.id;
+    state.demandFilter = "all";
+    appendMessage("assistant", result.reply);
+    await refreshAll();
+    document.querySelector(".active-demand-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    appendMessage("system", `Nao consegui criar a demanda da task: ${humanizeJobMessage(error.message, error.details)}`);
+  }
+}
+
+async function addAttachments(fileList) {
+  const files = Array.from(fileList || []);
+  for (const file of files) {
+    if (!isSupportedAttachment(file)) {
+      appendMessage("system", `Anexo ignorado: ${file.name} nao e imagem nem audio.`);
+      continue;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      appendMessage("system", `Anexo ignorado: ${file.name} passa de 8 MB.`);
+      continue;
+    }
+    if (state.attachments.length >= 4) {
+      appendMessage("system", "Limite de 4 anexos por mensagem.");
+      break;
+    }
+    state.attachments.push(await fileToAttachment(file));
+  }
+  renderAttachmentTray();
+}
+
+function isSupportedAttachment(file) {
+  return file?.type?.startsWith("image/") || file?.type?.startsWith("audio/");
+}
+
+function fileToAttachment(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      resolve({
+        id: crypto.randomUUID(),
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        kind: file.type.startsWith("image/") ? "imagem" : "audio",
+        dataUrl: String(reader.result || "")
+      });
+    });
+    reader.addEventListener("error", () => reject(reader.error));
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderAttachmentTray() {
+  els.attachmentTray.replaceChildren(...state.attachments.map((attachment) => {
+    const item = document.createElement("span");
+    item.className = "attachment-chip";
+
+    const label = document.createElement("span");
+    label.textContent = `${attachment.kind}: ${attachment.name}`;
+
+    const remove = iconButton("x", `Remover ${attachment.name}`);
+    remove.addEventListener("click", () => {
+      state.attachments = state.attachments.filter((candidate) => candidate.id !== attachment.id);
+      renderAttachmentTray();
+    });
+
+    item.append(label, remove);
+    return item;
+  }));
+  updateComposerValidation();
+}
+
+function clearAttachments() {
+  state.attachments = [];
+  renderAttachmentTray();
+}
+
+function attachmentSummary(attachment) {
+  return {
+    name: attachment.name,
+    type: attachment.type,
+    kind: attachment.kind,
+    size: attachment.size
+  };
+}
+
+function activeJobSummary() {
+  if (!state.selectedJob) {
+    return null;
+  }
+  return {
+    id: state.selectedJob.id,
+    goal: state.selectedJob.goal,
+    mode: state.selectedJob.mode,
+    status: state.selectedJob.status
+  };
+}
+
 async function refreshAll() {
-  const [status, tasksData, memoriesData, jobsData] = await Promise.all([
+  const [status, tasksData, memoriesData, jobsData, costsData] = await Promise.all([
     api("/api/status"),
     api("/api/tasks"),
     api("/api/memories"),
-    api("/api/jobs?limit=20")
+    api("/api/jobs?limit=20"),
+    api("/api/costs")
   ]);
 
   state.status = status;
   state.tasks = tasksData.tasks;
   state.memories = memoriesData.memories;
   state.jobs = jobsData.jobs;
+  state.costs = costsData;
   await loadSelectedJob();
   renderStatus();
+  renderTopNextStep();
+  renderTopView();
   renderTasks();
   renderMemories();
   renderJobs();
   renderTools();
+  renderCosts();
+  renderIntegrations();
+  renderLocalContextSummary();
   renderComposerIntents();
   renderCouncil();
   renderSessionTabs();
@@ -247,6 +426,13 @@ async function refreshJobs() {
   await loadSelectedJob();
   renderJobs();
   renderCouncil();
+  renderLocalContextSummary();
+  renderTopNextStep();
+}
+
+async function refreshCosts() {
+  state.costs = await api("/api/costs");
+  renderCosts();
 }
 
 async function loadSelectedJob() {
@@ -273,46 +459,154 @@ function renderStatus() {
   els.privacyPill.textContent = "Local privado";
   els.privacyPill.title = "Servidor local em 127.0.0.1; chave OpenAI fica no servidor.";
 
-  els.realtimePill.textContent = state.status.realtimeEnabled ? "Voz ao vivo" : "Voz local";
+  const voiceProvider = state.status.realtimeProvider === "gemini" ? "Gemini Live" : "OpenAI";
+  els.realtimePill.textContent = state.status.realtimeEnabled ? `Voz: ${voiceProvider}` : "Voz local";
   els.realtimePill.className = `pill ${state.status.realtimeEnabled ? "ok" : "warn"}`;
   els.realtimePill.title = state.status.realtimeEnabled
-    ? `Realtime ${state.status.realtimeModel} com voz ${state.status.realtimeVoice}.`
-    : "OPENAI_API_KEY ausente; AURA opera com fallback local.";
+    ? `${voiceProvider} · ${state.status.realtimeModel} · voz ${state.status.realtimeVoice}.`
+    : "Voz ao vivo indisponivel; AURA opera com fallback local.";
 
   els.tasksPill.textContent = `${state.status.memory.openTasks} tarefas abertas`;
   els.tasksPill.className = "pill";
 
-  renderProviderPill(els.geminiPill, state.status.providers?.gemini);
-  renderProviderPill(els.grokPill, state.status.providers?.grok);
-  renderProviderPill(els.codexPill, state.status.providers?.codex);
+  renderIntegrations();
 }
 
-function renderProviderPill(element, provider = {}) {
-  const name = provider.label || provider.name || element.textContent;
-  const status = provider.status || "checking";
-  const labels = {
-    available: "pronto",
-    unavailable: "indisponivel",
-    checking: "verificando"
-  };
-  element.className = `provider-pill ${status}`;
-  element.textContent = `${name} ${labels[status] || status}`;
-  element.title = provider.available
-    ? `${name} disponivel${provider.version ? `: ${provider.version}` : "."}`
-    : provider.error || `${name} ainda nao verificado.`;
+function renderTopNextStep() {
+  if (!els.topNextStep) {
+    return;
+  }
+
+  if (state.selectedJob) {
+    els.topNextStep.textContent = nextStepForJob(state.selectedJob);
+    return;
+  }
+
+  const openTasks = state.tasks.filter((task) => task.status !== "done").length;
+  if (openTasks) {
+    els.topNextStep.textContent = `Escolha uma das ${openTasks} tarefas abertas e defina Codex, Conselho ou Codex + Conselho.`;
+    return;
+  }
+
+  els.topNextStep.textContent = "Diga ou escreva uma missao para AURA organizar o trabalho.";
+}
+
+function renderTopView() {
+  const showCosts = state.topView === "costs";
+  els.topViewButtons.forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.topView === state.topView));
+  });
+  document.querySelector(".cockpit").hidden = showCosts;
+  document.querySelector(".jobs-panel").hidden = showCosts;
+  document.querySelector(".session-panel").hidden = showCosts;
+  if (els.topCostPanel) {
+    els.topCostPanel.hidden = !showCosts;
+  }
 }
 
 function renderComposerIntents() {
   els.composerIntentButtons.forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.composerIntent === state.composerIntent));
   });
+  updateComposerValidation();
+}
+
+function renderIntegrations() {
+  if (!state.status || !els.integrationsList) {
+    return;
+  }
+
+  const providers = state.status.providers || {};
+  const items = [
+    {
+      name: "Voz ao vivo",
+      role: state.status.realtimeProvider === "gemini" ? "Gemini Live" : "OpenAI Realtime",
+      detail: state.status.realtimeEnabled ? `${state.status.realtimeModel} · ${state.status.realtimeVoice}` : "fallback local por texto",
+      state: state.status.realtimeEnabled ? "available" : "checking"
+    },
+    integrationItemForProvider("Codex", providers.codex),
+    integrationItemForProvider("Gemini", providers.gemini),
+    integrationItemForProvider("Grok", providers.grok),
+    integrationItemForProvider("OpenRouter", providers.openrouter),
+    {
+      name: "Workspace",
+      role: "Cockpit local",
+      detail: "127.0.0.1 · dados locais",
+      state: "available"
+    }
+  ];
+
+  els.integrationsList.replaceChildren(...items.map((item) => {
+    const row = document.createElement("article");
+    row.className = `integration-card ${item.state}`;
+
+    const dot = document.createElement("span");
+    dot.className = "integration-dot";
+    dot.setAttribute("aria-hidden", "true");
+
+    const body = document.createElement("div");
+    body.className = "integration-body";
+    const title = document.createElement("strong");
+    title.textContent = item.name;
+    const role = document.createElement("span");
+    role.textContent = item.role || "IA conectada";
+    const detail = document.createElement("small");
+    detail.textContent = item.detail;
+    body.append(title, role, detail);
+
+    const state = document.createElement("span");
+    state.className = "integration-state";
+    state.textContent = labelForIntegrationState(item.state);
+
+    row.append(dot, body, state);
+    return row;
+  }));
+}
+
+function integrationItemForProvider(name, provider = {}) {
+  const status = provider.status || (provider.available ? "available" : "unavailable");
+  return {
+    name: provider.label || name,
+    role: roleForProvider(provider.name || name),
+    detail: provider.available
+      ? provider.version || "CLI disponivel"
+      : provider.error || "nao configurado neste ambiente",
+    state: status
+  };
+}
+
+function roleForProvider(name) {
+  const key = String(name || "").toLowerCase();
+  if (key.includes("codex")) {
+    return "Executor local";
+  }
+  if (key.includes("gemini")) {
+    return "Analise e voz";
+  }
+  if (key.includes("grok")) {
+    return "Critica e riscos";
+  }
+  if (key.includes("openrouter")) {
+    return "Roteador de modelos";
+  }
+  return "Integracao";
+}
+
+function labelForIntegrationState(status) {
+  const labels = {
+    available: "pronto",
+    unavailable: "off",
+    checking: "local"
+  };
+  return labels[status] || status;
 }
 
 function renderCouncil() {
   const seats = [
     councilSeatFor("codex", "Codex", "Executor local", "Arquivos, comandos e workspace."),
     councilSeatFor("gemini", "Gemini", "Analise alternativa", "Amplitude, contexto e comparacao."),
-    councilSeatFor("grok", "Grok", "Critica e riscos", "Contrapontos, riscos e caminhos alternativos.")
+    councilSeatFor("grok", "Grok", "Critica e riscos", "Contrapontos, riscos e caminhos alternativos."),
+    councilSeatFor("openrouter", "OpenRouter", "Roteador de modelos", "Parecer externo via modelos roteados.")
   ];
 
   els.aiCouncil.replaceChildren(...seats.map((seat) => {
@@ -408,7 +702,7 @@ function analystCouncilState(job, key, name, role) {
 
 function councilSummaryForJob(job) {
   if (job.mode === "analyze") {
-    return "Gemini e Grok entram como analistas; Codex permanece em espera ate haver decisao de execucao.";
+    return "Gemini, Grok e OpenRouter entram como analistas; Codex permanece em espera ate haver decisao de execucao.";
   }
   if (job.mode === "implement") {
     return "Codex e o executor desta demanda; Gemini e Grok continuam visiveis para revisao e contraponto.";
@@ -427,13 +721,43 @@ function renderTasks() {
     const actions = document.createElement("div");
     actions.className = "row-actions";
 
+    const executor = document.createElement("select");
+    executor.className = "task-executor";
+    executor.setAttribute("aria-label", `Executor para ${task.title}`);
+    for (const [value, labelText] of [
+      ["codex", "Codex"],
+      ["council", "Conselho"],
+      ["codex-council", "Codex + Conselho"]
+    ]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = labelText;
+      executor.append(option);
+    }
+    executor.value = state.taskExecutor;
+    executor.addEventListener("change", () => {
+      state.taskExecutor = executor.value;
+    });
+
+    const developButton = document.createElement("button");
+    developButton.type = "button";
+    developButton.className = "task-dev-button";
+    developButton.textContent = "Desenvolver";
+    developButton.addEventListener("click", async () => {
+      await withBusyButton(developButton, "Criando", async () => {
+        await developTask(task.id, executor.value);
+      });
+    });
+
     const doneButton = iconButton(task.status === "done" ? "↩" : "✓", task.status === "done" ? "Reabrir" : "Concluir");
     doneButton.addEventListener("click", async () => {
-      await api(`/api/tasks/${task.id}`, {
-        method: "PATCH",
-        body: { status: task.status === "done" ? "open" : "done" }
+      await withBusyButton(doneButton, "...", async () => {
+        await api(`/api/tasks/${task.id}`, {
+          method: "PATCH",
+          body: { status: task.status === "done" ? "open" : "done" }
+        });
+        await refreshAll();
       });
-      await refreshAll();
     });
 
     const deleteButton = iconButton("×", "Excluir");
@@ -441,11 +765,13 @@ function renderTasks() {
       if (!confirm(`Excluir tarefa "${task.title}"?`)) {
         return;
       }
-      await api(`/api/tasks/${task.id}?confirm=true`, { method: "DELETE" });
-      await refreshAll();
+      await withBusyButton(deleteButton, "...", async () => {
+        await api(`/api/tasks/${task.id}?confirm=true`, { method: "DELETE" });
+        await refreshAll();
+      });
     });
 
-    actions.append(doneButton, deleteButton);
+    actions.append(executor, developButton, doneButton, deleteButton);
     item.append(label, actions);
     return item;
   }));
@@ -462,8 +788,10 @@ function renderMemories() {
       if (!confirm("Excluir esta memoria local?")) {
         return;
       }
-      await api(`/api/memories/${memory.id}?confirm=true`, { method: "DELETE" });
-      await refreshAll();
+      await withBusyButton(deleteButton, "...", async () => {
+        await api(`/api/memories/${memory.id}?confirm=true`, { method: "DELETE" });
+        await refreshAll();
+      });
     });
 
     item.append(content, deleteButton);
@@ -472,6 +800,7 @@ function renderMemories() {
 }
 
 function renderJobs() {
+  renderDemandHistorySummary();
   renderDemandFilters();
 
   if (!state.jobs.length) {
@@ -532,9 +861,61 @@ function renderJobs() {
 }
 
 function renderDemandFilters() {
+  const counts = demandCounts();
+  const labels = {
+    all: "Todas",
+    needs: "Aguardando voce",
+    running: "Rodando",
+    failed: "Falhou",
+    done: "Concluido"
+  };
   els.demandFilterButtons.forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset.demandFilter === state.demandFilter));
+    const key = button.dataset.demandFilter;
+    button.setAttribute("aria-pressed", String(key === state.demandFilter));
+    button.textContent = `${labels[key] || key} ${counts[key] ?? 0}`;
   });
+}
+
+function renderDemandHistorySummary() {
+  if (!els.demandHistorySummary) {
+    return;
+  }
+
+  const counts = demandCounts();
+  const selected = state.selectedJob;
+  const items = [
+    ["Total", counts.all],
+    ["Aguardando voce", counts.needs],
+    ["Em andamento", counts.running],
+    ["Falhas", counts.failed]
+  ];
+
+  const stats = items.map(([label, value]) => {
+    const item = document.createElement("span");
+    const strong = document.createElement("strong");
+    strong.textContent = value;
+    const text = document.createElement("small");
+    text.textContent = label;
+    item.append(strong, text);
+    return item;
+  });
+
+  const focus = document.createElement("p");
+  focus.textContent = selected
+    ? `Selecionada: demanda #${selected.id} · ${labelForJobStatus(selected.status)} · ${formatDateTime(selected.updatedAt)}`
+    : "Selecione uma demanda para ver detalhes, artefatos e eventos.";
+
+  els.demandHistorySummary.replaceChildren(...stats, focus);
+}
+
+function demandCounts() {
+  return {
+    all: state.jobs.length,
+    needs: state.jobs.filter((job) => ["draft", "awaiting_confirm", "needs_input"].includes(job.status)).length,
+    running: state.jobs.filter((job) => ["queued", "running"].includes(job.status)).length,
+    failed: state.jobs.filter((job) => ["failed", "cancelled"].includes(job.status)).length,
+    done: state.jobs.filter((job) => job.status === "done").length
+  };
 }
 
 function filteredJobs() {
@@ -566,11 +947,12 @@ function renderActiveDemand() {
     empty.className = "active-demand-empty";
 
     const title = document.createElement("strong");
-    title.textContent = "Nenhuma demanda ativa";
+    title.textContent = "Nenhuma demanda selecionada";
     const copy = document.createElement("p");
-    copy.textContent = "Quando voce criar ou selecionar uma demanda, AURA mostra aqui objetivo, status e proximo passo.";
+    copy.textContent = "Use o comando abaixo para conversar, pedir analise do Conselho ou transformar uma ideia em demanda de desenvolvimento.";
+    const dashboard = renderMissionOverviewCards(null);
 
-    empty.append(title, copy);
+    empty.append(title, copy, dashboard);
     els.activeDemand.append(empty);
     return;
   }
@@ -580,12 +962,22 @@ function renderActiveDemand() {
   status.className = `status-chip ${job.status}`;
   status.textContent = labelForJobStatus(job.status);
 
+  const mode = document.createElement("span");
+  mode.className = "active-demand-mode";
+  mode.textContent = `${labelForJobMode(job.mode)} · ${labelForPolicy(job.policyLevel)}`;
+
+  const head = document.createElement("div");
+  head.className = "active-demand-head";
+  head.append(status, mode);
+
   const goal = document.createElement("h3");
   goal.textContent = job.goal;
 
   const meta = document.createElement("p");
   meta.className = "active-demand-meta";
   meta.textContent = `Demanda #${job.id} · ${labelForJobMode(job.mode)} · ${labelForPolicy(job.policyLevel)}`;
+
+  const overview = renderMissionOverviewCards(job);
 
   const next = document.createElement("p");
   next.className = "active-demand-next";
@@ -628,6 +1020,8 @@ function renderActiveDemand() {
 
   const facts = document.createElement("dl");
   facts.className = "active-demand-facts";
+  appendFact(facts, "Integracao", integrationForJob(job));
+  appendFact(facts, "Contexto", demandContextLabel(job));
   appendFact(facts, "Criada", formatDateTime(job.createdAt));
   appendFact(facts, "Atualizada", formatDateTime(job.updatedAt));
 
@@ -640,14 +1034,8 @@ function renderActiveDemand() {
   });
 
   if (state.activeDemandTab === "council") {
-    const councilHint = document.createElement("p");
-    councilHint.className = "active-demand-next";
-    const label = document.createElement("strong");
-    label.textContent = "Conselho";
-    const copy = document.createElement("span");
-    copy.textContent = councilSummaryForJob(job);
-    councilHint.append(label, copy);
-    els.activeDemand.append(status, goal, meta, tabs, councilHint, action);
+    const councilPanel = renderActiveDemandCouncil(job);
+    els.activeDemand.append(head, goal, meta, overview, tabs, councilPanel, action);
     return;
   }
 
@@ -662,7 +1050,7 @@ function renderActiveDemand() {
     list.className = "job-events";
     list.replaceChildren(...(state.selectedJobEvents.length ? state.selectedJobEvents.map(renderJobEvent) : []));
     technical.append(copy, list);
-    els.activeDemand.append(status, goal, meta, tabs, technical, action);
+    els.activeDemand.append(head, goal, meta, overview, tabs, technical, action);
     return;
   }
 
@@ -677,14 +1065,14 @@ function renderActiveDemand() {
       empty.textContent = "Sem artefatos para esta demanda ainda.";
       panel.append(empty);
     }
-    els.activeDemand.append(status, goal, meta, tabs, panel, action);
+    els.activeDemand.append(head, goal, meta, overview, tabs, panel, action);
     return;
   }
 
   const timeline = renderDemandTimeline(job);
   const security = renderSecurityBand(job);
   const alert = renderHumanFailure(job);
-  els.activeDemand.append(status, goal, meta, tabs);
+  els.activeDemand.append(head, goal, meta, overview, tabs);
   els.activeDemand.append(timeline);
   if (security) {
     els.activeDemand.append(security);
@@ -693,6 +1081,31 @@ function renderActiveDemand() {
     els.activeDemand.append(alert);
   }
   els.activeDemand.append(next, facts, action);
+}
+
+function integrationForJob(job) {
+  if (job.mode === "implement") {
+    return "Codex local";
+  }
+  if (job.mode === "analyze") {
+    return "Gemini/Grok com consentimento";
+  }
+  return "AURA local";
+}
+
+function demandContextLabel(job) {
+  const metadata = job.metadata || {};
+  const files = metadata.files || metadata.likelyFiles;
+  if (Array.isArray(files) && files.length) {
+    return files.join(", ");
+  }
+  if (files) {
+    return String(files);
+  }
+  if (metadata.source) {
+    return `Origem: ${metadata.source}`;
+  }
+  return "Workspace e memoria locais.";
 }
 
 function renderHumanFailure(job) {
@@ -710,11 +1123,102 @@ function renderHumanFailure(job) {
   return panel;
 }
 
-function humanizeJobMessage(value) {
+function renderMissionOverviewCards(job) {
+  const cards = document.createElement("div");
+  cards.className = "mission-overview";
+
+  const waitingJobs = state.jobs.filter((item) => ["draft", "awaiting_confirm", "needs_input"].includes(item.status)).length;
+  const runningJobs = state.jobs.filter((item) => ["queued", "running"].includes(item.status)).length;
+  const openTasks = state.tasks.filter((task) => task.status !== "done").length;
+  const cost = state.costs?.totals?.estimatedCostUsd || 0;
+
+  const items = job ? [
+    ["Status", labelForJobStatus(job.status), labelForJobMode(job.mode)],
+    ["Executor", integrationForJob(job), labelForPolicy(job.policyLevel)],
+    ["Proximo passo", nextStepForJob(job), `Atualizada ${formatDateTime(job.updatedAt)}`],
+    ["Custo local", formatUsd(cost), `${formatInteger(state.costs?.totals?.tokens || 0)} tokens`]
+  ] : [
+    ["Tarefas", formatInteger(openTasks), "abertas"],
+    ["Demandas", formatInteger(runningJobs), "em execucao"],
+    ["Aguardando", formatInteger(waitingJobs), "sua decisao"],
+    ["Custo local", formatUsd(cost), `${formatInteger(state.costs?.totals?.tokens || 0)} tokens`]
+  ];
+
+  for (const [label, value, detail] of items) {
+    const card = document.createElement("article");
+    card.className = "mission-overview-card";
+    const small = document.createElement("small");
+    small.textContent = label;
+    const strong = document.createElement("strong");
+    strong.textContent = value;
+    const span = document.createElement("span");
+    span.textContent = detail;
+    card.append(small, strong, span);
+    cards.append(card);
+  }
+
+  return cards;
+}
+
+function renderActiveDemandCouncil(job) {
+  const panel = document.createElement("div");
+  panel.className = "active-demand-council";
+
+  const summary = document.createElement("p");
+  summary.className = "active-demand-next";
+  const label = document.createElement("strong");
+  label.textContent = "Conselho";
+  const copy = document.createElement("span");
+  copy.textContent = councilSummaryForJob(job);
+  summary.append(label, copy);
+  panel.append(summary);
+
+  const analystConsent = renderAnalystConsent(job);
+  const debateControls = renderDebateControls(job);
+  if (analystConsent) {
+    panel.append(analystConsent);
+  }
+  if (debateControls) {
+    panel.append(debateControls);
+  }
+  if (!analystConsent && !debateControls) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = job.mode === "implement"
+      ? "Esta demanda esta preparada para Codex. Use o Conselho depois como revisao ou crie uma demanda de analise."
+      : "Sem acao pendente do Conselho para esta demanda.";
+    panel.append(empty);
+  }
+
+  return panel;
+}
+
+function applyJobErrorDetails(error) {
+  if (!error?.details?.job) {
+    return;
+  }
+  state.selectedJob = error.details.job;
+  state.selectedJobId = error.details.job.id;
+  state.selectedJobEvents = error.details.events || state.selectedJobEvents;
+  state.selectedJobArtifacts = error.details.artifacts || state.selectedJobArtifacts;
+}
+
+function humanizeJobMessage(value, details = null) {
   const text = String(value || "").trim();
   const lower = text.toLowerCase();
   if (!text) {
     return "";
+  }
+  const lockedBy = details?.lockedBy;
+  if (lockedBy?.id || lower.includes("workspace is locked")) {
+    const id = lockedBy?.id ? ` #${lockedBy.id}` : "";
+    const status = lockedBy?.status ? ` (${labelForJobStatus(lockedBy.status)})` : "";
+    return `Ja existe uma demanda de escrita${id}${status} usando este workspace. Aguarde ela terminar ou cancele a demanda antes de iniciar outra execucao.`;
+  }
+  if (lower.includes("process timed out")) {
+    const match = text.match(/after\s+(\d+)ms/i);
+    const duration = match ? formatDurationMs(Number(match[1])) : "o limite configurado";
+    return `A execucao passou de ${duration} e foi interrompida. Revise os artefatos gerados e rode novamente com uma demanda menor ou aumente CODEX_TIMEOUT_MS.`;
   }
   if (lower.includes("codex cli was not found") || lower.includes("codex cli unavailable")) {
     return "Codex CLI nao foi encontrado. Instale o Codex CLI ou configure AURA_CODEX_BIN e tente novamente.";
@@ -728,6 +1232,9 @@ function humanizeJobMessage(value) {
   if (lower.includes("grok cli was not found")) {
     return "Grok CLI nao foi encontrado. Instale o Grok CLI ou configure AURA_GROK_BIN antes de consultar este analista.";
   }
+  if (lower.includes("openrouter cli was not found")) {
+    return "OpenRouter CLI nao foi encontrado. Instale o OpenRouter CLI ou configure AURA_OPENROUTER_BIN antes de consultar este analista.";
+  }
   if (lower.includes("unavailable") || lower.includes("503")) {
     return "O modelo ou provedor esta temporariamente indisponivel. Aguarde alguns instantes e tente novamente.";
   }
@@ -738,6 +1245,18 @@ function humanizeJobMessage(value) {
     return "A demanda precisa de permissao ou confirmacao antes de continuar. Revise o risco e aprove somente se fizer sentido.";
   }
   return text;
+}
+
+function formatDurationMs(value) {
+  if (!Number.isFinite(value) || value <= 0) {
+    return "o limite configurado";
+  }
+  const seconds = Math.round(value / 1000);
+  if (seconds < 60) {
+    return `${seconds} segundos`;
+  }
+  const minutes = Math.round(seconds / 60);
+  return `${minutes} minutos`;
 }
 
 function renderDemandTimeline(job) {
@@ -811,17 +1330,20 @@ function renderSecurityBand(job) {
   approve.className = "primary";
   approve.textContent = "Aprovar";
   approve.addEventListener("click", async () => {
-    try {
-      appendMessage("system", `Executando demanda #${job.id} com Codex apos aprovacao visual.`);
-      await api(`/api/jobs/${job.id}/codex/implement`, {
-        method: "POST",
-        body: { confirmed: true, prompt: job.goal }
-      });
-      await refreshJobs();
-    } catch (error) {
-      appendMessage("system", `Aprovacao nao concluida: ${error.message}`);
-      await refreshJobs();
-    }
+    await withBusyButton(approve, "Aprovando", async () => {
+      try {
+        appendMessage("system", `Executando demanda #${job.id} com Codex apos aprovacao visual.`);
+        await api(`/api/jobs/${job.id}/codex/implement`, {
+          method: "POST",
+          body: { confirmed: true, prompt: job.goal, timeoutMs: job.timeoutMs }
+        });
+        await refreshJobs();
+      } catch (error) {
+        applyJobErrorDetails(error);
+        appendMessage("system", `Aprovacao nao concluida: ${humanizeJobMessage(error.message, error.details)}`);
+        await refreshJobs();
+      }
+    });
   });
 
   const deny = document.createElement("button");
@@ -829,11 +1351,13 @@ function renderSecurityBand(job) {
   deny.className = "danger-button";
   deny.textContent = "Negar";
   deny.addEventListener("click", async () => {
-    const result = await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
-    state.selectedJob = result.job;
-    state.selectedJobEvents = result.events || [];
-    await refreshJobs();
-    appendMessage("system", `Demanda #${job.id} negada sem executar.`);
+    await withBusyButton(deny, "Negando", async () => {
+      const result = await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      await refreshJobs();
+      appendMessage("system", `Demanda #${job.id} negada sem executar.`);
+    });
   });
 
   const details = document.createElement("button");
@@ -886,11 +1410,13 @@ function renderJobDetail() {
       if (!confirm(`Cancelar demanda #${job.id}?`)) {
         return;
       }
-      const result = await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
-      state.selectedJob = result.job;
-      state.selectedJobEvents = result.events || [];
-      await refreshJobs();
-      logEvent("job.cancel", { id: job.id, status: result.job.status });
+      await withBusyButton(cancelButton, "Cancelando", async () => {
+        const result = await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
+        state.selectedJob = result.job;
+        state.selectedJobEvents = result.events || [];
+        await refreshJobs();
+        logEvent("job.cancel", { id: job.id, status: result.job.status });
+      });
     });
     actions.append(cancelButton);
   }
@@ -904,20 +1430,23 @@ function renderJobDetail() {
       if (!confirm(`Executar demanda #${job.id} com permissao de escrita no workspace?`)) {
         return;
       }
-      let result = null;
-      try {
-        result = await api(`/api/jobs/${job.id}/codex/implement`, {
-          method: "POST",
-          body: { confirmed: true, prompt: job.goal }
-        });
-        state.selectedJob = result.job;
-        state.selectedJobEvents = result.events || [];
-        state.selectedJobArtifacts = result.artifacts || [];
-      } catch (error) {
-        appendMessage("system", `Implementacao nao concluida: ${error.message}`);
-      }
-      await refreshJobs();
-      logEvent("job.implement", { id: job.id, status: result?.job?.status || "failed" });
+      await withBusyButton(runButton, "Executando", async () => {
+        let result = null;
+        try {
+          result = await api(`/api/jobs/${job.id}/codex/implement`, {
+            method: "POST",
+            body: { confirmed: true, prompt: job.goal, timeoutMs: job.timeoutMs }
+          });
+          state.selectedJob = result.job;
+          state.selectedJobEvents = result.events || [];
+          state.selectedJobArtifacts = result.artifacts || [];
+        } catch (error) {
+          applyJobErrorDetails(error);
+          appendMessage("system", `Implementacao nao concluida: ${humanizeJobMessage(error.message, error.details)}`);
+        }
+        await refreshJobs();
+        logEvent("job.implement", { id: job.id, status: result?.job?.status || "failed" });
+      });
     });
     actions.append(runButton);
   }
@@ -1049,39 +1578,50 @@ function renderAnalystConsent(job) {
   controls.className = "analyst-controls";
   const gemini = checkboxControl(`analyst-gemini-${job.id}`, "Gemini", true);
   const grok = checkboxControl(`analyst-grok-${job.id}`, "Grok", true);
+  const openrouter = checkboxControl(`analyst-openrouter-${job.id}`, "OpenRouter", true);
   const runButton = document.createElement("button");
   runButton.type = "button";
   runButton.className = "primary";
   runButton.textContent = "Consultar";
+  const updateAnalystButton = () => {
+    runButton.disabled = !gemini.input.checked && !grok.input.checked && !openrouter.input.checked;
+  };
+  gemini.input.addEventListener("change", updateAnalystButton);
+  grok.input.addEventListener("change", updateAnalystButton);
+  openrouter.input.addEventListener("change", updateAnalystButton);
   runButton.addEventListener("click", async () => {
     const consent = {
       gemini: gemini.input.checked,
-      grok: grok.input.checked
+      grok: grok.input.checked,
+      openrouter: openrouter.input.checked
     };
-    if (!consent.gemini && !consent.grok) {
+    if (!consent.gemini && !consent.grok && !consent.openrouter) {
       appendMessage("system", "Selecione ao menos um analista.");
       return;
     }
-    let result = null;
-    try {
-      result = await api(`/api/jobs/${job.id}/analysts/run`, {
-        method: "POST",
-        body: {
-          consent,
-          context: analystContext(job)
-        }
-      });
-      state.selectedJob = result.job;
-      state.selectedJobEvents = result.events || [];
-      state.selectedJobArtifacts = result.artifacts || [];
-    } catch (error) {
-      appendMessage("system", `Analise nao concluida: ${error.message}`);
-    }
-    await refreshJobs();
-    logEvent("job.analysts", { id: job.id, status: result?.job?.status || "failed", consent });
+    await withBusyButton(runButton, "Consultando", async () => {
+      let result = null;
+      try {
+        result = await api(`/api/jobs/${job.id}/analysts/run`, {
+          method: "POST",
+          body: {
+            consent,
+            context: analystContext(job)
+          }
+        });
+        state.selectedJob = result.job;
+        state.selectedJobEvents = result.events || [];
+        state.selectedJobArtifacts = result.artifacts || [];
+      } catch (error) {
+        appendMessage("system", `Analise nao concluida: ${error.message}`);
+      }
+      await refreshJobs();
+      logEvent("job.analysts", { id: job.id, status: result?.job?.status || "failed", consent });
+    });
   });
+  updateAnalystButton();
 
-  controls.append(gemini.label, grok.label, runButton);
+  controls.append(gemini.label, grok.label, openrouter.label, runButton);
   panel.append(preview, controls);
   return panel;
 }
@@ -1101,23 +1641,25 @@ function renderDebateControls(job) {
   button.className = "primary";
   button.textContent = "Sintetizar";
   button.addEventListener("click", async () => {
-    let result = null;
-    try {
-      result = await api(`/api/jobs/${job.id}/debate/synthesize`, {
-        method: "POST",
-        body: {
-          requested: true,
-          budget: { maxRounds: 1 }
-        }
-      });
-      state.selectedJob = result.job;
-      state.selectedJobEvents = result.events || [];
-      state.selectedJobArtifacts = result.artifacts || [];
-    } catch (error) {
-      appendMessage("system", `Sintese nao concluida: ${error.message}`);
-    }
-    await refreshJobs();
-    logEvent("job.debate", { id: job.id, status: result?.job?.status || "failed" });
+    await withBusyButton(button, "Sintetizando", async () => {
+      let result = null;
+      try {
+        result = await api(`/api/jobs/${job.id}/debate/synthesize`, {
+          method: "POST",
+          body: {
+            requested: true,
+            budget: { maxRounds: 1 }
+          }
+        });
+        state.selectedJob = result.job;
+        state.selectedJobEvents = result.events || [];
+        state.selectedJobArtifacts = result.artifacts || [];
+      } catch (error) {
+        appendMessage("system", `Sintese nao concluida: ${error.message}`);
+      }
+      await refreshJobs();
+      logEvent("job.debate", { id: job.id, status: result?.job?.status || "failed" });
+    });
   });
 
   panel.append(summary, button);
@@ -1156,12 +1698,14 @@ function renderRoutineDraftControls(job) {
   approve.className = "primary";
   approve.textContent = "Aprovar";
   approve.addEventListener("click", async () => {
-    const result = await api(`/api/jobs/${job.id}/approve`, { method: "POST" });
-    state.selectedJob = result.job;
-    state.selectedJobEvents = result.events || [];
-    state.selectedJobArtifacts = result.artifacts || [];
-    await refreshJobs();
-    logEvent("job.approve", { id: job.id, status: result.job.status });
+    await withBusyButton(approve, "Aprovando", async () => {
+      const result = await api(`/api/jobs/${job.id}/approve`, { method: "POST" });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      state.selectedJobArtifacts = result.artifacts || [];
+      await refreshJobs();
+      logEvent("job.approve", { id: job.id, status: result.job.status });
+    });
   });
 
   const discard = document.createElement("button");
@@ -1169,27 +1713,37 @@ function renderRoutineDraftControls(job) {
   discard.className = "danger-button";
   discard.textContent = "Descartar";
   discard.addEventListener("click", async () => {
-    const result = await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
-    state.selectedJob = result.job;
-    state.selectedJobEvents = result.events || [];
-    await refreshJobs();
-    logEvent("job.discard", { id: job.id, status: result.job.status });
+    await withBusyButton(discard, "Descartando", async () => {
+      const result = await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      await refreshJobs();
+      logEvent("job.discard", { id: job.id, status: result.job.status });
+    });
   });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const result = await api(`/api/jobs/${job.id}`, {
-      method: "PATCH",
-      body: {
-        goal: input.value.trim(),
-        mode: mode.value
-      }
+    const goal = input.value.trim();
+    if (!goal) {
+      appendMessage("system", "Preencha o objetivo do draft antes de guardar.");
+      input.focus();
+      return;
+    }
+    await withBusyButton(save, "Guardando", async () => {
+      const result = await api(`/api/jobs/${job.id}`, {
+        method: "PATCH",
+        body: {
+          goal,
+          mode: mode.value
+        }
+      });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      state.selectedJobArtifacts = result.artifacts || [];
+      await refreshJobs();
+      logEvent("job.draft.update", { id: job.id });
     });
-    state.selectedJob = result.job;
-    state.selectedJobEvents = result.events || [];
-    state.selectedJobArtifacts = result.artifacts || [];
-    await refreshJobs();
-    logEvent("job.draft.update", { id: job.id });
   });
 
   form.append(input, mode, save, approve, discard);
@@ -1301,6 +1855,394 @@ function renderTools() {
   }));
 }
 
+function renderCosts() {
+  if ((!els.costsPanel && !els.topCostsPanel) || !state.costs) {
+    return;
+  }
+
+  const totals = state.costs.totals || {};
+  const hero = document.createElement("section");
+  hero.className = "cost-hero";
+
+  const heroMain = document.createElement("article");
+  heroMain.className = "cost-hero-total";
+  const heroLabel = document.createElement("span");
+  heroLabel.textContent = "Custo total estimado";
+  const heroValue = document.createElement("strong");
+  heroValue.textContent = formatUsd(totals.estimatedCostUsd || 0);
+  const heroNote = document.createElement("small");
+  heroNote.textContent = `${formatInteger(totals.tokens || 0)} tokens medidos em ${totals.measuredEvents || 0} eventos`;
+  heroMain.append(heroLabel, heroValue, heroNote);
+
+  const metrics = document.createElement("div");
+  metrics.className = "cost-metrics compact";
+  metrics.append(
+    renderCostMetricCard("Entrada", formatInteger(totals.inputTokens || 0), "tokens"),
+    renderCostMetricCard("Saida", formatInteger(totals.outputTokens || 0), "tokens"),
+    renderCostMetricCard("Sem preco", formatInteger(totals.unpricedEvents || 0), "eventos")
+  );
+  hero.append(heroMain, metrics);
+
+  const providerRows = costProviderDashboardRows();
+  const providerGrid = document.createElement("section");
+  providerGrid.className = "cost-provider-grid";
+  providerRows.forEach((item) => providerGrid.append(renderCostProviderCard(item)));
+  const providerSection = renderCostSection("Custo por IA", providerGrid);
+
+  const chartGrid = document.createElement("section");
+  chartGrid.className = "cost-chart-grid";
+  chartGrid.append(
+    renderCostBarChart("Custos por modelo", state.costs.byModel || [], {
+      amount: (item) => formatUsd(item.estimatedCostUsd || 0),
+      detail: (item) => `${formatInteger(item.tokens || 0)} tokens · ${formatInteger(item.inputTokens || 0)} in · ${formatInteger(item.outputTokens || 0)} out`,
+      value: (item) => item.estimatedCostUsd || 0,
+      fallbackValue: (item) => item.tokens || 0
+    }),
+    renderCostBarChart("Tipos de token", state.costs.tokenBreakdown || [], {
+      amount: (item) => formatInteger(item.tokens || 0),
+      detail: () => "tokens consumidos",
+      value: (item) => item.tokens || 0
+    })
+  );
+
+  const keys = document.createElement("div");
+  keys.className = "cost-key-grid";
+  for (const key of state.costs.keys || []) {
+    keys.append(renderCostKey(key));
+  }
+
+  const models = document.createElement("div");
+  models.className = "cost-breakdown";
+  const modelSection = renderCostSection("Tabela por modelo", models);
+  for (const item of state.costs.byModel || []) {
+    models.append(renderCostRow(item.label, item.estimatedCostUsd, `${formatInteger(item.tokens || 0)} tokens · ${formatInteger(item.inputTokens || 0)} entrada · ${formatInteger(item.outputTokens || 0)} saida · ${item.events} eventos`));
+  }
+  if (!models.children.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "Sem modelos medidos ainda.";
+    models.append(empty);
+  }
+
+  const breakdownGrid = document.createElement("section");
+  breakdownGrid.className = "cost-breakdown-grid";
+  breakdownGrid.append(modelSection, renderCostBarChart("Serie recente", state.costs.tokenSeries || [], {
+    amount: (item) => formatUsd(item.estimatedCostUsd || 0),
+    detail: (item) => `${formatInteger(item.tokens || 0)} tokens · ${item.events} eventos`,
+    value: (item) => item.estimatedCostUsd || 0,
+    fallbackValue: (item) => item.tokens || 0
+  }));
+
+  const recent = document.createElement("div");
+  recent.className = "cost-recent";
+  const recentList = document.createElement("ul");
+  recentList.className = "events";
+  const rows = state.costs.recent || [];
+  recentList.replaceChildren(...rows.slice(0, 8).map(renderCostEvent));
+  if (!rows.length) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "Sem eventos de custo registrados.";
+    recentList.append(empty);
+  }
+  recent.append(recentList);
+  const recentSection = renderCostSection("Uso recente", recent);
+
+  const notes = document.createElement("section");
+  notes.className = "cost-notes";
+  for (const text of state.costs.notes || []) {
+    const note = document.createElement("p");
+    note.textContent = text;
+    notes.append(note);
+  }
+
+  const keysSection = renderCostSection("Credenciais monitoradas", keys);
+  const content = [hero, providerSection, chartGrid, breakdownGrid, keysSection, recentSection, notes];
+  if (els.costsPanel) {
+    els.costsPanel.replaceChildren(...content);
+  }
+  if (els.topCostsPanel) {
+    els.topCostsPanel.replaceChildren(...content.map((node) => node.cloneNode(true)));
+  }
+}
+
+function costProviderDashboardRows() {
+  const usageByProvider = new Map((state.costs.byProvider || []).map((item) => [normalizeProviderName(item.label), item]));
+  const configuredProviders = (state.costs.keys || []).map((key) => key.provider);
+  const labels = [...new Set([...configuredProviders, ...(state.costs.byProvider || []).map((item) => item.label)])];
+  return labels.map((label) => {
+    const usage = usageByProvider.get(normalizeProviderName(label)) || {};
+    const key = (state.costs.keys || []).find((item) => normalizeProviderName(item.provider) === normalizeProviderName(label));
+    return {
+      label,
+      configured: key?.configured ?? Boolean(usage.events),
+      source: key?.source || "Uso medido",
+      tokens: usage.tokens || 0,
+      inputTokens: usage.inputTokens || 0,
+      outputTokens: usage.outputTokens || 0,
+      events: usage.events || 0,
+      unpricedEvents: usage.unpricedEvents || 0,
+      estimatedCostUsd: usage.estimatedCostUsd || 0
+    };
+  }).sort((left, right) => (
+    right.estimatedCostUsd - left.estimatedCostUsd ||
+    right.tokens - left.tokens ||
+    Number(right.configured) - Number(left.configured) ||
+    left.label.localeCompare(right.label)
+  ));
+}
+
+function renderCostProviderCard(item) {
+  const card = document.createElement("article");
+  card.className = `cost-provider-card ${item.configured ? "configured" : "missing"}`;
+
+  const header = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = item.label;
+  const status = document.createElement("span");
+  status.textContent = item.configured ? "conectada" : "ausente";
+  header.append(title, status);
+
+  const amount = document.createElement("b");
+  amount.textContent = formatUsd(item.estimatedCostUsd || 0);
+
+  const stats = document.createElement("dl");
+  stats.className = "cost-provider-stats";
+  appendFact(stats, "Tokens", formatInteger(item.tokens || 0));
+  appendFact(stats, "Entrada", formatInteger(item.inputTokens || 0));
+  appendFact(stats, "Saida", formatInteger(item.outputTokens || 0));
+  appendFact(stats, "Eventos", formatInteger(item.events || 0));
+
+  const note = document.createElement("small");
+  note.textContent = item.unpricedEvents
+    ? `${item.unpricedEvents} evento(s) sem tabela de preco.`
+    : item.source;
+
+  card.append(header, amount, stats, note);
+  return card;
+}
+
+function normalizeProviderName(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function renderCostMetricCard(label, value, detail) {
+  const card = document.createElement("article");
+  card.className = "cost-summary-card";
+  const title = document.createElement("strong");
+  title.textContent = label;
+  const amount = document.createElement("span");
+  amount.textContent = value;
+  const note = document.createElement("small");
+  note.textContent = detail;
+  card.append(title, amount, note);
+  return card;
+}
+
+function renderCostSection(title, body) {
+  const section = document.createElement("section");
+  section.className = "cost-section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  section.append(heading, body);
+  return section;
+}
+
+function renderCostBarChart(title, rows, options) {
+  const chart = document.createElement("div");
+  chart.className = "cost-chart";
+  const maxPrimary = Math.max(0, ...rows.map((item) => Number(options.value(item) || 0)));
+  const maxFallback = Math.max(0, ...rows.map((item) => Number(options.fallbackValue?.(item) || 0)));
+  const max = maxPrimary || maxFallback || 1;
+  for (const item of rows.slice(0, 8)) {
+    chart.append(renderCostBar(item, max, options, maxPrimary === 0));
+  }
+  if (!chart.children.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "Sem dados suficientes para grafico.";
+    chart.append(empty);
+  }
+  return renderCostSection(title, chart);
+}
+
+function renderCostBar(item, max, options, usingFallback) {
+  const value = Number((usingFallback ? options.fallbackValue?.(item) : options.value(item)) || 0);
+  const percent = Math.max(2, Math.min(100, (value / max) * 100));
+  const row = document.createElement("article");
+  row.className = "cost-chart-row";
+
+  const header = document.createElement("div");
+  const label = document.createElement("strong");
+  label.textContent = item.label;
+  const amount = document.createElement("span");
+  amount.textContent = options.amount(item);
+  header.append(label, amount);
+
+  const track = document.createElement("div");
+  track.className = "cost-chart-track";
+  const bar = document.createElement("span");
+  bar.style.width = `${percent}%`;
+  track.append(bar);
+
+  const detail = document.createElement("small");
+  detail.textContent = options.detail(item);
+  row.append(header, track, detail);
+  return row;
+}
+
+function renderCostKey(key) {
+  const item = document.createElement("article");
+  item.className = `cost-key ${key.configured ? "configured" : "missing"}`;
+  const head = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = key.provider;
+  const status = document.createElement("span");
+  status.className = "cost-key-status";
+  status.textContent = key.configured ? "configurada" : "ausente";
+  head.append(title, status);
+  const label = document.createElement("span");
+  label.textContent = key.label;
+  const source = document.createElement("small");
+  source.textContent = key.source;
+  item.append(head, label, source);
+  return item;
+}
+
+function renderCostRow(label, value, detail) {
+  const row = document.createElement("article");
+  row.className = "cost-row";
+  const title = document.createElement("strong");
+  title.textContent = label;
+  const amount = document.createElement("span");
+  amount.textContent = formatUsd(value || 0);
+  const note = document.createElement("small");
+  note.textContent = detail;
+  row.append(title, amount, note);
+  return row;
+}
+
+function renderCostEvent(event) {
+  const item = document.createElement("li");
+  const main = document.createElement("div");
+  const type = document.createElement("code");
+  type.textContent = `${event.provider}:${event.operation}`;
+  const message = document.createElement("span");
+  const price = event.estimatedCostUsd === null || event.estimatedCostUsd === undefined ? "sem preco" : formatUsd(event.estimatedCostUsd || 0);
+  message.textContent = `${event.model} · ${price} · ${formatInteger(totalTokensFromUsage(event.usage))} tokens`;
+  main.append(type, message);
+
+  const time = document.createElement("time");
+  time.dateTime = event.createdAt;
+  time.textContent = formatDateTime(event.createdAt);
+  item.append(main, time);
+  return item;
+}
+
+function formatUsd(value) {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 6
+  }).format(Number(value || 0));
+}
+
+function formatInteger(value) {
+  return new Intl.NumberFormat("pt-BR", {
+    maximumFractionDigits: 0
+  }).format(Number(value || 0));
+}
+
+function totalTokensFromUsage(usage = {}) {
+  return inputTokensFromUsage(usage) + outputTokensFromUsage(usage);
+}
+
+function inputTokensFromUsage(usage = {}) {
+  const detailed =
+    numberFromMetric(usage.textInputTokens) +
+    numberFromMetric(usage.textCachedInputTokens) +
+    numberFromMetric(usage.audioInputTokens) +
+    numberFromMetric(usage.audioCachedInputTokens) +
+    numberFromMetric(usage.imageInputTokens) +
+    numberFromMetric(usage.imageCachedInputTokens);
+  return detailed || numberFromMetric(usage.rawInputTokens);
+}
+
+function outputTokensFromUsage(usage = {}) {
+  const detailed =
+    numberFromMetric(usage.textOutputTokens) +
+    numberFromMetric(usage.audioOutputTokens);
+  return detailed || numberFromMetric(usage.rawOutputTokens);
+}
+
+function renderLocalContextSummary() {
+  if (!els.localContextSummary || !state.status) {
+    return;
+  }
+
+  const openTasks = state.tasks.filter((task) => task.status !== "done").length;
+  const waitingJobs = state.jobs.filter((job) => ["draft", "awaiting_confirm", "needs_input"].includes(job.status)).length;
+  const runningJobs = state.jobs.filter((job) => ["queued", "running"].includes(job.status)).length;
+  const items = [
+    ["Tarefas abertas", openTasks],
+    ["Memorias locais", state.memories.length],
+    ["Demandas ativas", runningJobs],
+    ["Aguardando voce", waitingJobs],
+    ["Custo estimado", formatUsd(state.costs?.totals?.estimatedCostUsd || 0)],
+    ["Tela", state.screenStream ? "capturando" : "parada"],
+    ["Retencao", `${state.status.jobHistoryRetentionDays} dias`]
+  ];
+
+  els.localContextSummary.replaceChildren(...items.map(([label, value]) => {
+    const item = document.createElement("span");
+    const strong = document.createElement("strong");
+    strong.textContent = value;
+    const small = document.createElement("small");
+    small.textContent = label;
+    item.append(strong, small);
+    return item;
+  }));
+}
+
+function updateComposerValidation() {
+  if (!els.localSubmitButton) {
+    return;
+  }
+  const hasPayload = Boolean(els.localInput.value.trim()) || state.attachments.length > 0;
+  els.localSubmitButton.disabled = !hasPayload;
+  els.localSubmitButton.title = hasPayload ? "" : "Digite uma mensagem ou anexe um arquivo.";
+}
+
+function updateSubmitButton(form, enabled) {
+  const button = form?.querySelector("button[type='submit']");
+  if (!button) {
+    return;
+  }
+  button.disabled = !enabled;
+  button.title = enabled ? "" : "Preencha o campo antes de continuar.";
+}
+
+async function withBusyButton(button, busyLabel, action) {
+  if (!button || button.disabled) {
+    return;
+  }
+
+  const originalText = button.textContent;
+  const originalTitle = button.title;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.textContent = busyLabel;
+  try {
+    await action();
+  } finally {
+    button.textContent = originalText;
+    button.title = originalTitle;
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+  }
+}
+
 function appendFact(list, label, value) {
   const term = document.createElement("dt");
   term.textContent = label;
@@ -1339,7 +2281,7 @@ function buildAnalystPreview(job) {
     `Workspace: ${job.workspace}`,
     `Mode: ${job.mode}`,
     `Policy: ${job.policyLevel}`,
-    "Destinations: Gemini, Grok",
+    "Destinations: Gemini, Grok, OpenRouter",
     "Constraints: read-only, plan mode, no file edits, no Git commands"
   ];
   const files = Array.isArray(context.files) ? context.files : [];
@@ -1459,17 +2401,25 @@ function renderRoutine() {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const goal = input.value.trim();
+    if (!goal) {
+      appendMessage("system", "Preencha a sugestao da rotina antes de criar a demanda.");
+      input.focus();
+      return;
+    }
     try {
-      const result = await api("/api/routine/jobs", {
-        method: "POST",
-        body: {
-          goal: input.value.trim(),
-          mode: mode.value
-        }
+      await withBusyButton(button, "Criando", async () => {
+        const result = await api("/api/routine/jobs", {
+          method: "POST",
+          body: {
+            goal,
+            mode: mode.value
+          }
+        });
+        state.selectedJobId = result.job.id;
+        await refreshAll();
+        logEvent("routine.job.created", { id: result.job.id, mode: result.job.mode });
       });
-      state.selectedJobId = result.job.id;
-      await refreshAll();
-      logEvent("routine.job.created", { id: result.job.id, mode: result.job.mode });
     } catch (error) {
       appendMessage("system", `Nao consegui criar a demanda da rotina: ${error.message}`);
     }
@@ -1490,6 +2440,7 @@ async function startScreenCapture() {
     els.screenVideo.srcObject = state.screenStream;
     els.screenVideo.hidden = false;
     els.stopScreenButton.hidden = false;
+    renderLocalContextSummary();
     state.screenStream.getVideoTracks()[0].addEventListener("ended", stopScreenCapture);
   } catch (error) {
     appendMessage("system", `Captura nao iniciada: ${error.message}`);
@@ -1502,6 +2453,7 @@ function stopScreenCapture() {
   els.screenVideo.srcObject = null;
   els.screenVideo.hidden = true;
   els.stopScreenButton.hidden = true;
+  renderLocalContextSummary();
 }
 
 function setVoiceStatus(status) {
@@ -1509,30 +2461,241 @@ function setVoiceStatus(status) {
     idle: "AURA esta pronta para conversar por texto.",
     fallback: "Voz ao vivo indisponivel; continuo com voce por texto local.",
     "requesting-token": "Estou preparando uma sessao segura de voz.",
+    "connecting-gemini": "Estou conectando o canal Gemini Live.",
     "requesting-microphone": "O navegador vai pedir acesso ao microfone.",
     negotiating: "Estou conectando o canal de voz ao vivo.",
-    connected: "Voz ao vivo conectada. Pode falar comigo.",
+    connected: "Voz ao vivo conectada.",
+    standby: "Voz ativa em standby. Diga Aura para me chamar; diga ate logo, Aura para eu voltar ao standby.",
     closed: "Voz encerrada. Continuo disponivel por texto."
   };
   appendMessage("system", labels[status] || status);
   if (status === "idle" || status === "closed" || status === "fallback") {
     els.voiceButton.dataset.connected = "false";
     els.voiceButton.textContent = "Conectar voz";
+  } else if (status === "standby" || status === "connected") {
+    els.voiceButton.dataset.connected = "true";
+    els.voiceButton.textContent = "Desconectar voz";
   }
 }
 
 function humanizeVoiceError(error) {
   const message = String(error?.message || "").toLowerCase();
+  const status = Number(error?.status || 0);
+  const code = String(error?.code || "").toLowerCase();
+  const type = String(error?.type || "").toLowerCase();
   if (message.includes("openai_api_key")) {
     return "a chave de voz ao vivo nao esta configurada";
   }
-  if (message.includes("microphone") || message.includes("microfone") || message.includes("permission")) {
-    return "o microfone nao foi liberado pelo navegador";
+  if (message.includes("gemini api key") || message.includes("gemini live websocket")) {
+    return "a conexao com o Gemini Live nao foi aberta";
+  }
+  if (message.includes("audio context")) {
+    return "este navegador nao permite inicializar audio em tempo real";
+  }
+  if (message.includes("webrtc is not available")) {
+    return "este navegador nao oferece WebRTC para voz ao vivo; use Chrome ou Edge";
+  }
+  if (message.includes("microphone capture is not available")) {
+    return "este navegador nao permite capturar microfone nesta pagina";
+  }
+  if (message.includes("notallowederror") || message.includes("permission denied") || message.includes("denied") || message.includes("permission")) {
+    return "o microfone foi bloqueado pelo navegador; libere o microfone no icone ao lado do endereco";
+  }
+  if (message.includes("notfounderror") || message.includes("device not found") || message.includes("requested device not found")) {
+    return "nenhum microfone foi encontrado pelo navegador";
   }
   if (message.includes("token")) {
     return "nao foi possivel preparar a sessao segura de voz";
   }
+  if (message.includes("401") || message.includes("unauthorized") || message.includes("invalid api key")) {
+    return "a chave da OpenAI foi recusada pela API";
+  }
+  if (code.includes("insufficient_quota") || message.includes("insufficient_quota") || message.includes("quota")) {
+    return "o projeto da OpenAI esta sem credito ou sem cota disponivel para voz ao vivo";
+  }
+  if (status === 429 || code.includes("rate_limit") || type.includes("rate_limit") || message.includes("rate limit")) {
+    return "a OpenAI recusou a chamada por limite, credito ou cota";
+  }
+  if (message.includes("connection reset") || message.includes("econnreset") || message.includes("recv failure")) {
+    return "a conexao com o Realtime da OpenAI foi reiniciada durante a chamada de voz";
+  }
+  if (message.includes("realtime/calls") || message.includes("sdp")) {
+    return "a negociacao WebRTC com a OpenAI falhou";
+  }
   return "houve uma falha de conexao";
+}
+
+async function handleRealtimeToolCall(call) {
+  const args = safeJson(call.arguments);
+  if (call.name === "aura_create_task") {
+    return createTaskFromRealtime(args);
+  }
+  if (call.name === "aura_develop_task") {
+    return developTaskFromRealtime(args);
+  }
+  if (call.name === "aura_create_development_demand") {
+    return createDevelopmentDemandFromRealtime(args);
+  }
+
+  return { ok: false, error: "Ferramenta desconhecida." };
+}
+
+async function recordRealtimeUsage(event) {
+  const response = event.response || event;
+  const usage = usageFromRealtimeResponse(response);
+  if (!hasMeasuredUsage(usage)) {
+    return;
+  }
+
+  const responseId = response.id || event.event_id || `${Date.now()}`;
+  if (state.recordedRealtimeUsage.has(responseId)) {
+    return;
+  }
+  state.recordedRealtimeUsage.add(responseId);
+
+  const result = await api("/api/costs/usage", {
+    method: "POST",
+    body: {
+      provider: "openai",
+      keyLabel: "OPENAI_API_KEY",
+      model: state.status?.realtimeModel || "gpt-realtime-2.1",
+      source: "realtime",
+      operation: "response.done",
+      usage,
+      metadata: {
+        responseId,
+        voice: state.status?.realtimeVoice || ""
+      }
+    }
+  });
+  state.costs = result.costs;
+  renderCosts();
+}
+
+function usageFromRealtimeResponse(response) {
+  const usage = response?.usage || {};
+  const inputDetails = usage.input_token_details || usage.inputTokenDetails || {};
+  const outputDetails = usage.output_token_details || usage.outputTokenDetails || {};
+  return {
+    textInputTokens: numberFromMetric(inputDetails.text_tokens ?? inputDetails.textTokens),
+    textCachedInputTokens: numberFromMetric(inputDetails.cached_tokens ?? inputDetails.cachedTokens ?? inputDetails.cached_text_tokens),
+    textOutputTokens: numberFromMetric(outputDetails.text_tokens ?? outputDetails.textTokens),
+    audioInputTokens: numberFromMetric(inputDetails.audio_tokens ?? inputDetails.audioTokens),
+    audioCachedInputTokens: numberFromMetric(inputDetails.cached_audio_tokens ?? inputDetails.cachedAudioTokens),
+    audioOutputTokens: numberFromMetric(outputDetails.audio_tokens ?? outputDetails.audioTokens),
+    imageInputTokens: numberFromMetric(inputDetails.image_tokens ?? inputDetails.imageTokens),
+    imageCachedInputTokens: numberFromMetric(inputDetails.cached_image_tokens ?? inputDetails.cachedImageTokens),
+    rawInputTokens: numberFromMetric(usage.input_tokens ?? usage.inputTokens),
+    rawOutputTokens: numberFromMetric(usage.output_tokens ?? usage.outputTokens)
+  };
+}
+
+function hasMeasuredUsage(usage) {
+  return Object.values(usage).some((value) => Number(value) > 0);
+}
+
+function numberFromMetric(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+async function createTaskFromRealtime(args) {
+  const title = buildRealtimeTaskTitle(args);
+  if (!title) {
+    return { ok: false, error: "Titulo da task ausente." };
+  }
+
+  const result = await api("/api/tasks", { method: "POST", body: { title } });
+  appendMessage("system", `Task criada pela voz: ${result.task.title}`);
+  await refreshAll();
+  return { ok: true, task: result.task };
+}
+
+async function developTaskFromRealtime(args) {
+  const taskId = Number(args.taskId || 0);
+  if (!Number.isFinite(taskId) || taskId <= 0) {
+    return { ok: false, error: "Id da task ausente." };
+  }
+
+  const result = await api(`/api/tasks/${taskId}/develop`, {
+    method: "POST",
+    body: {
+      source: "realtime-tool",
+      requestedBy: "voice",
+      extraGoal: args.extraGoal || "",
+      executor: args.executor || "codex"
+    }
+  });
+  state.selectedJobId = result.job.id;
+  state.demandFilter = "all";
+  appendMessage("system", `Demanda ${result.job.id} criada pela voz para desenvolver a task ${taskId}.`);
+  await refreshAll();
+  return { ok: true, job: result.job, task: result.task };
+}
+
+async function createDevelopmentDemandFromRealtime(args) {
+  const goal = String(args.goal || "").trim();
+  if (!goal) {
+    return { ok: false, error: "Objetivo da demanda ausente." };
+  }
+  const executor = String(args.executor || "codex").toLowerCase();
+  const mode = executor === "council" ? "analyze" : "implement";
+
+  const result = await api("/api/jobs", {
+    method: "POST",
+    body: {
+      goal,
+      mode,
+      requestedBy: "voice",
+      metadata: {
+        source: "realtime-tool",
+        executor,
+        voice: {
+          confirmation: mode === "implement" ? "visual-required-for-write" : "read-only-analysis"
+        }
+      }
+    }
+  });
+  state.selectedJobId = result.job.id;
+  state.demandFilter = "all";
+  appendMessage("system", `Demanda ${result.job.id} criada pela voz. Revise a confirmacao visual antes de executar.`);
+  await refreshAll();
+  return { ok: true, job: result.job };
+}
+
+function buildRealtimeTaskTitle(args) {
+  const rawTitle = String(args.title || "").trim();
+  if (!rawTitle) {
+    return "";
+  }
+
+  const explicitDemandId = Number(args.demandId || 0);
+  if (explicitDemandId > 0) {
+    return `[Demanda #${explicitDemandId}] ${rawTitle}`;
+  }
+
+  const scope = String(args.scope || "").toLowerCase();
+  if (scope.includes("plataforma") || scope.includes("cockpit") || scope.includes("aura")) {
+    return `[Plataforma] ${rawTitle}`;
+  }
+  if (scope.includes("demanda") && state.selectedJob?.id) {
+    return `[Demanda #${state.selectedJob.id}] ${rawTitle}`;
+  }
+  return rawTitle;
+}
+
+function safeJson(value) {
+  if (!value) {
+    return {};
+  }
+  if (typeof value === "object") {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
 }
 
 function appendAssistantDelta(delta) {
@@ -1544,17 +2707,72 @@ function appendAssistantDelta(delta) {
   last.querySelector("p").textContent += delta;
 }
 
-function appendMessage(role, text) {
+function appendMessage(role, text, attachments = []) {
   const item = document.createElement("article");
   item.className = `message ${role}`;
+
+  const avatar = document.createElement("span");
+  avatar.className = "message-avatar";
+  avatar.setAttribute("aria-hidden", "true");
+  avatar.textContent = avatarForRole(role);
+
+  const content = document.createElement("div");
+  content.className = "message-content";
   const label = document.createElement("strong");
-  label.textContent = role === "user" ? "Voce" : role === "assistant" ? "AURA" : "Sistema";
+  label.textContent = labelForRole(role);
   const body = document.createElement("p");
   body.textContent = text;
-  item.append(label, body);
+  content.append(label, body);
+  item.append(avatar, content);
+  if (attachments.length) {
+    content.append(renderMessageAttachments(attachments));
+  }
   els.conversation.append(item);
   els.conversation.scrollTop = els.conversation.scrollHeight;
   return item;
+}
+
+function avatarForRole(role) {
+  const labels = {
+    user: "Vo",
+    assistant: "A",
+    system: "S"
+  };
+  return labels[role] || "A";
+}
+
+function labelForRole(role) {
+  const labels = {
+    user: "Voce",
+    assistant: "AURA",
+    system: "Sistema"
+  };
+  return labels[role] || role;
+}
+
+function renderMessageAttachments(attachments) {
+  const list = document.createElement("div");
+  list.className = "message-attachments";
+  for (const attachment of attachments) {
+    const card = document.createElement("figure");
+    card.className = "message-attachment";
+    if (attachment.type?.startsWith("image/")) {
+      const image = document.createElement("img");
+      image.src = attachment.dataUrl;
+      image.alt = attachment.name;
+      card.append(image);
+    } else if (attachment.type?.startsWith("audio/")) {
+      const audio = document.createElement("audio");
+      audio.controls = true;
+      audio.src = attachment.dataUrl;
+      card.append(audio);
+    }
+    const caption = document.createElement("figcaption");
+    caption.textContent = `${attachment.kind}: ${attachment.name}`;
+    card.append(caption);
+    list.append(card);
+  }
+  return list;
 }
 
 function logEvent(type, payload) {
@@ -1593,7 +2811,11 @@ async function api(path, options = {}) {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.error || `Request failed: ${response.status}`);
+    const error = new Error(data.error || `Request failed: ${response.status}`);
+    error.status = response.status;
+    error.details = data;
+    error.lockedBy = data.lockedBy;
+    throw error;
   }
   return data;
 }
