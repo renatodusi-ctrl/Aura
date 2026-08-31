@@ -11,9 +11,9 @@ const WRITER_POLICY_LEVELS = new Set(["write", "git"]);
 const REQUEST_SOURCES = new Set(["text", "voice", "routine"]);
 const TERMINAL_JOB_STATUSES = new Set(["done", "failed", "cancelled"]);
 const JOB_STATUS_TRANSITIONS = new Map([
-  ["draft", new Set(["awaiting_confirm", "queued", "running", "failed", "cancelled"])],
-  ["awaiting_confirm", new Set(["queued", "failed", "cancelled"])],
-  ["queued", new Set(["running", "failed", "cancelled"])],
+  ["draft", new Set(["awaiting_confirm", "queued", "running", "needs_input", "failed", "cancelled"])],
+  ["awaiting_confirm", new Set(["queued", "needs_input", "failed", "cancelled"])],
+  ["queued", new Set(["running", "needs_input", "failed", "cancelled"])],
   ["running", new Set(["needs_input", "done", "failed", "cancelled"])],
   ["needs_input", new Set(["awaiting_confirm", "queued", "running", "failed", "cancelled"])],
   ["done", new Set()],

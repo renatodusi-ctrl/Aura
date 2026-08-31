@@ -1088,6 +1088,12 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.plan-critique-input {
+  width: 100%;
+  min-height: 58px;
+  resize: vertical;
+}
+
 .security-actions {
   display: flex;
   flex-wrap: wrap;

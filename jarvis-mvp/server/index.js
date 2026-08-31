@@ -27,6 +27,7 @@ import {
   recordJobEvent,
   recordCostUsage,
   updateJobDraft,
+  updateJobMetadata,
   updateJobStatus
 } from "./memory.js";
 import { getLocalContext, listTools, runTool } from "./tools.js";
@@ -216,6 +217,14 @@ async function route(req, res) {
 
   if (jobRoute && method === "POST" && jobRoute.action === "approve") {
     return approveJobRoute(jobRoute.id, res);
+  }
+
+  if (jobRoute && method === "POST" && jobRoute.action === "pause") {
+    return pauseJobRoute(jobRoute.id, res);
+  }
+
+  if (jobRoute && method === "POST" && jobRoute.action === "revise") {
+    return reviseJobPlanRoute(jobRoute.id, req, res);
   }
 
   if (jobRoute && method === "POST" && jobRoute.action === "codex/ask") {
@@ -858,6 +867,76 @@ function cancelJobRoute(id, res) {
   }
 }
 
+function pauseJobRoute(id, res) {
+  try {
+    const job = getJob(id);
+    if (!job) {
+      throw httpError(404, "Job not found.");
+    }
+    if (!["draft", "awaiting_confirm", "queued", "running", "needs_input"].includes(job.status)) {
+      throw httpError(409, "Only active or pending jobs can be paused.");
+    }
+    if (job.status === "running" && (cancelJobProcess(job.id) || cancelAnalystJobProcess(job.id))) {
+      const current = getJob(job.id);
+      rememberJobEvent(current, "pause_requested");
+      return sendJson(res, 202, { job: current, cancellation: "requested", events: listJobEvents(job.id), artifacts: listJobArtifacts(job.id) });
+    }
+
+    const paused = updateJobStatus(job.id, "needs_input", {
+      summary: "Demanda pausada pelo usuario antes de executar efeitos no workspace."
+    });
+    updateJobMetadata(job.id, {
+      paused: {
+        at: new Date().toISOString(),
+        reason: "operator-request",
+        reversible: true
+      }
+    });
+    recordJobEvent(job.id, "job.paused", "Job paused before irreversible effects.", { reversible: true });
+    rememberJobEvent(getJob(job.id), "paused");
+    return sendJson(res, 200, { job: getJob(job.id), events: listJobEvents(job.id), artifacts: listJobArtifacts(job.id) });
+  } catch (error) {
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not pause job."));
+  }
+}
+
+async function reviseJobPlanRoute(id, req, res) {
+  try {
+    const job = getJob(id);
+    if (!job) {
+      throw httpError(404, "Job not found.");
+    }
+    if (!["draft", "awaiting_confirm", "needs_input"].includes(job.status)) {
+      throw httpError(409, "Only jobs waiting for a decision can be revised.");
+    }
+    const body = await readJson(req);
+    const comment = redactText(String(body.comment || body.critique || "").trim());
+    if (!comment) {
+      throw httpError(400, "Revision comment is required.");
+    }
+
+    const revised = updateJobMetadata(job.id, {
+      operatorCritique: {
+        comment,
+        at: new Date().toISOString(),
+        effect: "revise-before-execution"
+      },
+      planRevision: {
+        status: "needs-human-review",
+        reason: "operator-critique"
+      }
+    });
+    recordJobEvent(job.id, "job.plan_critiqued", "Operator critique added before execution.", {
+      comment,
+      effect: "revise-before-execution"
+    });
+    rememberJobEvent(revised, "plan_critiqued");
+    return sendJson(res, 200, { job: revised, events: listJobEvents(job.id), artifacts: listJobArtifacts(job.id) });
+  } catch (error) {
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not revise job plan."));
+  }
+}
+
 function skipJobRoute(id, res) {
   try {
     const job = getJob(id);
@@ -1146,7 +1225,7 @@ function policyLevelForJobMode(mode, policyLevel) {
 }
 
 function matchJobRoute(pathname) {
-  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|skip|approve|codex\/ask|codex\/implement|analysts\/preview|analysts\/run|debate\/synthesize|screen-evidence))?$/);
+  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|skip|approve|pause|revise|codex\/ask|codex\/implement|analysts\/preview|analysts\/run|debate\/synthesize|screen-evidence))?$/);
   if (!match) {
     return null;
   }

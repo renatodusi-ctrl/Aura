@@ -2345,9 +2345,17 @@ function renderSecurityBand(job) {
   const likelyFiles = Array.isArray(metadata.likelyFiles) ? metadata.likelyFiles.join(", ") : metadata.likelyFiles;
   appendFact(facts, "Dados/arquivos", likelyFiles || "Workspace local aprovado para esta demanda.");
   appendFact(facts, "Motivo", humanizeJobMessage(policy.reason || "Esta demanda pode alterar arquivos locais."));
+  if (metadata.operatorCritique?.comment) {
+    appendFact(facts, "Critica", metadata.operatorCritique.comment);
+  }
 
   const controls = document.createElement("div");
   controls.className = "security-actions";
+
+  const critique = document.createElement("textarea");
+  critique.className = "plan-critique-input";
+  critique.placeholder = "Critique ou ajuste o plano antes de aprovar";
+  critique.setAttribute("aria-label", "Critica do plano antes da execucao");
 
   const approve = document.createElement("button");
   approve.type = "button";
@@ -2384,6 +2392,43 @@ function renderSecurityBand(job) {
     });
   });
 
+  const pause = document.createElement("button");
+  pause.type = "button";
+  pause.textContent = "Pausar";
+  pause.addEventListener("click", async () => {
+    await withBusyButton(pause, "Pausando", async () => {
+      const result = await api(`/api/jobs/${job.id}/pause`, { method: "POST" });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      state.selectedJobArtifacts = result.artifacts || [];
+      await refreshJobs();
+      appendMessage("system", `Demanda #${job.id} pausada antes de executar.`);
+    });
+  });
+
+  const revise = document.createElement("button");
+  revise.type = "button";
+  revise.textContent = "Registrar critica";
+  revise.addEventListener("click", async () => {
+    const comment = critique.value.trim();
+    if (!comment) {
+      critique.focus();
+      appendMessage("system", "Escreva a critica ou ajuste do plano antes de registrar.");
+      return;
+    }
+    await withBusyButton(revise, "Registrando", async () => {
+      const result = await api(`/api/jobs/${job.id}/revise`, {
+        method: "POST",
+        body: { comment }
+      });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      state.selectedJobArtifacts = result.artifacts || [];
+      await refreshJobs();
+      appendMessage("system", `Critica registrada na demanda #${job.id}. Revise o plano antes de executar.`);
+    });
+  });
+
   const details = document.createElement("button");
   details.type = "button";
   details.textContent = "Ver detalhes";
@@ -2400,8 +2445,8 @@ function renderSecurityBand(job) {
     controls.append(back);
   }
 
-  controls.append(approve, deny, details);
-  panel.append(title, facts, controls);
+  controls.append(approve, pause, revise, deny, details);
+  panel.append(title, facts, critique, controls);
   return panel;
 }
 

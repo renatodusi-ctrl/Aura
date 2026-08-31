@@ -134,6 +134,46 @@ try {
   assert.ok(screenEvidenceRemoved.data.events.some((event) => event.type === "screen.evidence_removed"));
   assert.ok(!screenEvidenceRemoved.data.artifacts.some((artifact) => artifact.id === screenEvidence.data.artifact.id));
 
+  const governed = await request("/api/jobs", {
+    method: "POST",
+    headers,
+    body: {
+      goal: "Smoke governable approval flow",
+      workspace: root,
+      mode: "implement",
+      policyLevel: "write"
+    }
+  });
+  assert.equal(governed.status, 202);
+  assert.equal(governed.data.job.status, "awaiting_confirm");
+  jobIds.push(governed.data.job.id);
+
+  const revised = await request(`/api/jobs/${governed.data.job.id}/revise`, {
+    method: "POST",
+    headers,
+    body: { comment: "Antes de executar, reduzir escopo e nao expor OPENAI_API_KEY=sk-proj-revise-secret." }
+  });
+  assert.equal(revised.status, 200);
+  assert.match(revised.data.job.metadata.operatorCritique.comment, /reduzir escopo/);
+  assert.doesNotMatch(revised.data.job.metadata.operatorCritique.comment, /sk-proj-revise-secret/);
+  assert.ok(revised.data.events.some((event) => event.type === "job.plan_critiqued"));
+
+  const paused = await request(`/api/jobs/${governed.data.job.id}/pause`, {
+    method: "POST",
+    headers
+  });
+  assert.equal(paused.status, 200);
+  assert.equal(paused.data.job.status, "needs_input");
+  assert.equal(paused.data.job.metadata.paused.reversible, true);
+  assert.ok(paused.data.events.some((event) => event.type === "job.paused"));
+
+  const pausedCancelled = await request(`/api/jobs/${governed.data.job.id}/cancel`, {
+    method: "POST",
+    headers
+  });
+  assert.equal(pausedCancelled.status, 200);
+  assert.equal(pausedCancelled.data.job.status, "cancelled");
+
   const missingCli = await request(`/api/jobs/${created.data.job.id}/codex/ask`, {
     method: "POST",
     headers,

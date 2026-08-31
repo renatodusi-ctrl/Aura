@@ -91,6 +91,12 @@ Codex execution is owned by `server/codexAdapter.js`.
 - `ask` accepts `mode=ask` and `policy_level=read`, runs `codex exec` with `--sandbox read-only`, and records detection, stdout, stderr, exit status and final message on the job timeline.
 - `implement` accepts only `mode=implement`, `policy_level=write`, `status=awaiting_confirm` or recoverable `needs_input`, plus an explicit confirmation payload. It runs `codex exec` with `--sandbox workspace-write`, blocks push/reset/destructive intent, and persists diff, changed files, Codex logs, final message, local critic-review and optional test logs as artifacts. A critic gate of `review` or `block` pauses the job in `needs_input` for a human decision and adds `rollback-plan`, `independent-critic-brief` and `independent-critic-review` artifacts.
 
+Governable approval controls:
+
+- `POST /api/jobs/:id/pause` moves `draft`, `awaiting_confirm`, `queued` or recoverable work to `needs_input` without executing new effects.
+- `POST /api/jobs/:id/revise` stores an operator critique in redacted metadata before execution, so the plan can be adjusted before approval.
+- The cockpit approval band shows risk, likely files, rollback context when available, pause, critique and approval in the same flow.
+
 Gemini, Grok and OpenRouter analyst execution is owned by `server/analystAdapter.js`. It accepts only `mode=analyze` and `policy_level=read` jobs, requires destination consent, sends the same evidence brief to each selected analyst through that CLI's safe read-only/headless path, and normalizes responses into `findings`, `risks`, `open_questions`, `recommendation` and `confidence`.
 
 Analyst detection is a preflight signal, not a promise that the provider can complete the next request. Before dispatching the evidence brief, AURA runs a short JSON health-check per selected analyst. Providers that are missing, unreachable, blocked by network/certificate issues, or outside the response contract are skipped with timeline evidence and temporarily isolated by an in-memory circuit breaker. If every selected analyst is unusable or fails schema validation, the job moves to `needs_input` instead of `failed` so the operator can retry or skip the consultation. `POST /api/jobs/:id/cancel` also cancels active analyst processes, not only Codex supervisor jobs.
