@@ -51,6 +51,15 @@ It writes `exports/jarvis-rubric-report.json`. Read `score` for the current 0-10
 13. Keep `Silenciar narracao` active, move a demand to concluded, failed and cancelled states, and confirm AURA narrates at most two short sentences from the same next step shown in `Agora`.
 14. Click `Silenciar narracao`, repeat a state change, and confirm no spoken narration is queued while the cockpit stays available.
 
+## Advanced Voice Checklist
+
+1. Start the cockpit with `VOICE_PROVIDER=gemini` or `VOICE_PROVIDER=openai` and connect voice.
+2. Say `Aura, status das demandas` and confirm the `Voz` debug chips show capture and first-response latency.
+3. While AURA is speaking, start talking again with `Aura, pare e resuma`; the current audio should stop and the next answer should be short.
+4. Ask a longer exploratory question and confirm the turn-taking chip moves from `comando curto` to `conversa longa` or `conversa`.
+5. Confirm AURA does not continue playing delayed audio after the interruption counter increments.
+6. Say `ate logo Aura` and confirm the session returns to standby without overlapping speech.
+
 ## Future Automation
 
 - Add Playwright smoke tests.

@@ -44,6 +44,7 @@ const state = {
   screenPerception: null,
   screenPerceptionTimer: null,
   lastPerceptionSummary: "",
+  voiceMetrics: null,
   realtime: null,
   narrationEnabled: localStorage.getItem("aura.narrationEnabled") !== "false",
   proactivityEnabled: localStorage.getItem("aura.proactivityEnabled") !== "false",
@@ -80,6 +81,7 @@ const els = {
   localSubmitButton: document.querySelector("#local-submit-button"),
   voicePanel: document.querySelector(".voice-panel"),
   narrationToggle: document.querySelector("#narration-toggle"),
+  voiceMetrics: document.querySelector("#voice-metrics"),
   commandBrief: document.querySelector("#command-brief"),
   attachmentInput: document.querySelector("#attachment-input"),
   attachmentTray: document.querySelector("#attachment-tray"),
@@ -134,6 +136,11 @@ async function init() {
     },
     onTranscript: appendAssistantDelta,
     onToolCall: handleRealtimeToolCall,
+    onVoiceMetrics: (metrics) => {
+      state.voiceMetrics = metrics;
+      renderVoiceMetrics();
+      renderCommandBrief();
+    },
     sessionToken: () => state.sessionToken
   });
 
@@ -489,6 +496,7 @@ async function refreshAll() {
   renderLocalFiles();
   renderCodexActivity();
   renderCommandBrief();
+  renderVoiceMetrics();
   renderIntegrations();
   renderScreenPerceptionStatus();
   renderLocalContextSummary();
@@ -941,7 +949,7 @@ function renderCommandBrief() {
   };
   const items = [
     ["Modo", intentLabels[state.composerIntent] || "Conversar", modeHintForComposer()],
-    ["Voz", voiceState, state.status?.realtimeEnabled ? "standby por wake word" : (state.status?.voice?.fallbackReason || "fallback local")],
+    ["Voz", voiceState, voiceMetricsDetail() || (state.status?.realtimeEnabled ? "standby por wake word" : (state.status?.voice?.fallbackReason || "fallback local"))],
     ["Custo", formatUsd(cost), `${formatInteger(tokens)} tokens`],
     ["Demanda", selected ? `#${selected.id}` : "Nenhuma", selected ? nextStepForJob(selected) : "pronta para uma nova missao"]
   ];
@@ -957,6 +965,78 @@ function renderCommandBrief() {
     item.append(small, strong, span);
     return item;
   }));
+}
+
+function renderVoiceMetrics() {
+  if (!els.voiceMetrics) {
+    return;
+  }
+  const metrics = state.voiceMetrics;
+  if (!metrics) {
+    els.voiceMetrics.hidden = true;
+    els.voiceMetrics.replaceChildren();
+    return;
+  }
+  els.voiceMetrics.hidden = false;
+  els.voiceMetrics.replaceChildren(
+    voiceMetricChip("Estado", labelForVoiceTurn(metrics.turnState)),
+    voiceMetricChip("Captura", formatLatency(metrics.captureLatencyMs)),
+    voiceMetricChip("1a resposta", formatLatency(metrics.firstResponseLatencyMs)),
+    voiceMetricChip("Conclusao", formatLatency(metrics.conclusionLatencyMs)),
+    voiceMetricChip("Interrupcoes", formatInteger(metrics.interruptions || 0)),
+    voiceMetricChip("Turno", labelForTurnTaking(metrics.turnTakingMode))
+  );
+}
+
+function voiceMetricChip(label, value) {
+  const chip = document.createElement("span");
+  const small = document.createElement("small");
+  small.textContent = label;
+  const strong = document.createElement("strong");
+  strong.textContent = value;
+  chip.append(small, strong);
+  return chip;
+}
+
+function voiceMetricsDetail() {
+  const metrics = state.voiceMetrics;
+  if (!metrics) {
+    return "";
+  }
+  const parts = [
+    labelForVoiceTurn(metrics.turnState),
+    `captura ${formatLatency(metrics.captureLatencyMs)}`,
+    `1a resposta ${formatLatency(metrics.firstResponseLatencyMs)}`
+  ];
+  if (metrics.interruptions) {
+    parts.push(`${metrics.interruptions} interrupcao(oes)`);
+  }
+  return parts.join(" · ");
+}
+
+function labelForVoiceTurn(value) {
+  const labels = {
+    connecting: "conectando",
+    idle: "parada",
+    listening: "ouvindo",
+    speaking: "falando"
+  };
+  return labels[value] || "standby";
+}
+
+function labelForTurnTaking(value) {
+  const labels = {
+    conversation: "conversa",
+    long_conversation: "conversa longa",
+    quick_command: "comando curto",
+    standby: "standby",
+    summary_request: "resumo"
+  };
+  return labels[value] || "standby";
+}
+
+function formatLatency(value) {
+  return Number.isFinite(value) ? `${Math.round(value)}ms` : "-";
 }
 
 function modeHintForComposer() {

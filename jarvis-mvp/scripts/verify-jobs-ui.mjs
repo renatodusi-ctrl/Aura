@@ -5,6 +5,8 @@ import path from "node:path";
 const root = path.resolve(import.meta.dirname, "..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+const realtime = fs.readFileSync(path.join(root, "realtime.js"), "utf8");
+const voiceRuntime = fs.readFileSync(path.join(root, "voiceRuntime.js"), "utf8");
 const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
 
 for (const id of ["now-hud", "proactive-suggestion", "job-list", "job-detail", "jobs-refresh-button"]) {
@@ -13,6 +15,11 @@ for (const id of ["now-hud", "proactive-suggestion", "job-list", "job-detail", "
 }
 
 for (const id of ["screen-perception-status", "screen-perception-label", "screen-perception-purpose", "screen-perception-timer", "screen-duration-select"]) {
+  assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
+  assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
+}
+
+for (const id of ["voice-metrics"]) {
   assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
   assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
 }
@@ -47,6 +54,8 @@ for (const token of [
   "selectedPerceptionDurationMs",
   "formatCountdown",
   "screen.perception_ended",
+  "renderVoiceMetrics",
+  "voiceMetricsDetail",
   "renderNowHud",
   "nowHudFact",
   "runNowAction",
@@ -124,6 +133,17 @@ for (const token of [
   "Descartar"
 ]) {
   assert.match(app, new RegExp(token), `Missing jobs UI token: ${token}`);
+}
+
+for (const token of [
+  "aura.voice.metrics",
+  "aura.voice.barge_in",
+  "aura.voice.turn_taking",
+  "late-response-dropped",
+  "summary_request",
+  "quick_command"
+]) {
+  assert.match(`${realtime}\n${voiceRuntime}`, new RegExp(token), `Missing voice runtime token: ${token}`);
 }
 
 for (const token of [

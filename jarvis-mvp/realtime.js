@@ -1,9 +1,18 @@
+import {
+  classifyTurnTaking,
+  createVoiceMetrics,
+  isAssistantSpeaking,
+  markVoiceMetric,
+  voiceDirectiveForText
+} from "./voiceRuntime.js";
+
 export class RealtimeClient {
-  constructor({ onEvent, onStatus, onTranscript, onToolCall, sessionToken }) {
+  constructor({ onEvent, onStatus, onTranscript, onToolCall, onVoiceMetrics, sessionToken }) {
     this.onEvent = onEvent;
     this.onStatus = onStatus;
     this.onTranscript = onTranscript;
     this.onToolCall = onToolCall || (async () => ({ ok: false, error: "Tool handler unavailable." }));
+    this.onVoiceMetrics = onVoiceMetrics || (() => {});
     this.sessionToken = sessionToken || (() => "");
     this.pc = null;
     this.dc = null;
@@ -14,6 +23,9 @@ export class RealtimeClient {
     this.source = null;
     this.processor = null;
     this.playbackTime = 0;
+    this.audioSources = new Set();
+    this.muteAssistantAudioUntil = 0;
+    this.voiceMetrics = createVoiceMetrics();
     this.handledToolCalls = new Set();
   }
 
@@ -36,6 +48,7 @@ export class RealtimeClient {
       throw new Error("Microphone capture is not available in this browser.");
     }
 
+    this.markVoice("capture-requested", { provider: "openai" });
     this.onStatus("requesting-microphone");
     this.pc = new RTCPeerConnection();
     this.audio = document.createElement("audio");
@@ -57,6 +70,7 @@ export class RealtimeClient {
     };
 
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.markVoice("microphone-ready");
     this.pc.addTrack(this.stream.getAudioTracks()[0], this.stream);
 
     this.dc = this.pc.createDataChannel("oai-events");
@@ -102,6 +116,7 @@ export class RealtimeClient {
       throw new Error("AudioContext is not available in this browser.");
     }
 
+    this.markVoice("capture-requested", { provider: "gemini" });
     this.onStatus("connecting-gemini");
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     this.ws = new WebSocket(`${protocol}//${window.location.host}/api/gemini/live?session=${encodeURIComponent(this.sessionToken())}`);
@@ -125,6 +140,7 @@ export class RealtimeClient {
 
     this.onStatus("requesting-microphone");
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.markVoice("microphone-ready");
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     this.audioContext = new AudioContextCtor();
     await this.audioContext.resume();
@@ -152,6 +168,7 @@ export class RealtimeClient {
     this.pc?.close();
     this.processor?.disconnect();
     this.source?.disconnect();
+    this.stopAssistantAudio();
     this.stream?.getTracks().forEach((track) => track.stop());
     this.audio?.remove();
     this.audioContext?.close().catch(() => {});
@@ -164,7 +181,9 @@ export class RealtimeClient {
     this.source = null;
     this.processor = null;
     this.playbackTime = 0;
+    this.muteAssistantAudioUntil = 0;
     this.handledToolCalls.clear();
+    this.markVoice("closed");
     this.onStatus("idle");
   }
 
@@ -182,6 +201,13 @@ export class RealtimeClient {
   }
 
   sendText(text, attachments = []) {
+    const turn = classifyTurnTaking(text);
+    this.markVoice("user-input", { text });
+    this.onEvent({ type: "aura.voice.turn_taking", ...turn });
+    if (turn.shouldSummarize && isAssistantSpeaking(this.voiceMetrics)) {
+      this.interruptAssistant("summary-request");
+    }
+
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({
         type: "text",
@@ -246,8 +272,22 @@ export class RealtimeClient {
       });
     }
 
+    if (data.type === "input_audio_buffer.speech_started") {
+      this.interruptAssistant("barge-in");
+      this.markVoice("user-input", { text: "" });
+    }
+
+    if (data.type === "conversation.item.input_audio_transcription.completed") {
+      this.markVoice("user-input", { text: data.transcript || "" });
+    }
+
     if (data.type === "response.audio_transcript.delta" || data.type === "response.output_text.delta") {
+      this.markVoice("assistant-first-output");
       this.onTranscript(data.delta || "");
+    }
+
+    if (data.type === "response.done") {
+      this.markVoice("assistant-output-done");
     }
   }
 
@@ -267,15 +307,22 @@ export class RealtimeClient {
 
     const serverContent = data.serverContent;
     if (serverContent?.inputTranscription?.text) {
+      this.handleUserSpeech(serverContent.inputTranscription.text);
       this.onEvent({ type: "gemini.input_transcription", text: serverContent.inputTranscription.text });
     }
     if (serverContent?.outputTranscription?.text) {
+      this.markVoice("assistant-first-output");
       this.onTranscript(serverContent.outputTranscription.text);
     }
     for (const part of serverContent?.modelTurn?.parts || []) {
       if (part.inlineData?.data) {
+        this.markVoice("assistant-first-output");
         this.playPcmAudio(part.inlineData.data, mimeRate(part.inlineData.mimeType) || 24000);
       }
+    }
+
+    if (serverContent?.generationComplete || serverContent?.turnComplete) {
+      this.markVoice("assistant-output-done");
     }
 
     if (data.toolCall?.functionCalls) {
@@ -316,6 +363,11 @@ export class RealtimeClient {
     if (!this.audioContext) {
       return;
     }
+    if (performance.now() < this.muteAssistantAudioUntil) {
+      this.markVoice("late-response-dropped");
+      this.onEvent({ type: "aura.voice.late_audio_dropped" });
+      return;
+    }
     const pcm = base64ToInt16Array(base64Audio);
     const audioBuffer = this.audioContext.createBuffer(1, pcm.length, sampleRate);
     const channel = audioBuffer.getChannelData(0);
@@ -327,15 +379,64 @@ export class RealtimeClient {
     source.connect(this.audioContext.destination);
     const startAt = Math.max(this.audioContext.currentTime, this.playbackTime);
     source.start(startAt);
+    this.audioSources.add(source);
+    source.addEventListener("ended", () => {
+      this.audioSources.delete(source);
+    });
     this.playbackTime = startAt + audioBuffer.duration;
   }
 
   textWithAttachmentContext(text, attachments) {
+    const directive = voiceDirectiveForText(text);
+    const base = directive ? `${text}\n\n${directive}` : text;
     if (!attachments.length) {
-      return text;
+      return base;
     }
     const summary = attachments.map((attachment) => `${attachment.kind}: ${attachment.name}`).join("; ");
-    return `${text}\n\nAnexos enviados: ${summary}`;
+    return `${base}\n\nAnexos enviados: ${summary}`;
+  }
+
+  handleUserSpeech(text) {
+    if (isAssistantSpeaking(this.voiceMetrics)) {
+      this.interruptAssistant("barge-in");
+    }
+    this.markVoice("user-input", { text });
+  }
+
+  interruptAssistant(reason) {
+    if (!isAssistantSpeaking(this.voiceMetrics) && !this.audioSources.size) {
+      return;
+    }
+    this.stopAssistantAudio();
+    this.muteAssistantAudioUntil = performance.now() + 500;
+    this.markVoice("barge-in");
+    this.onEvent({ type: "aura.voice.barge_in", reason });
+    if (this.dc?.readyState === "open") {
+      this.dc.send(JSON.stringify({ type: "response.cancel" }));
+    }
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "interrupt", reason }));
+    }
+  }
+
+  stopAssistantAudio() {
+    for (const source of this.audioSources) {
+      try {
+        source.stop();
+      } catch (_) {
+        // Source may already have ended.
+      }
+    }
+    this.audioSources.clear();
+    if (this.audioContext) {
+      this.playbackTime = this.audioContext.currentTime;
+    }
+  }
+
+  markVoice(type, data = {}) {
+    this.voiceMetrics = markVoiceMetric(this.voiceMetrics, { type, ...data });
+    this.onVoiceMetrics(this.voiceMetrics);
+    this.onEvent({ type: "aura.voice.metrics", metrics: this.voiceMetrics });
   }
 
   toolCallFromEvent(data) {

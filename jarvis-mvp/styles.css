@@ -1271,6 +1271,38 @@ h2 {
   background: #11151b;
 }
 
+.voice-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.voice-metrics[hidden] {
+  display: none;
+}
+
+.voice-metrics span {
+  display: inline-grid;
+  gap: 2px;
+  min-width: 88px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(13, 18, 25, .76);
+}
+
+.voice-metrics small {
+  color: var(--muted);
+  font-size: .68rem;
+  text-transform: uppercase;
+}
+
+.voice-metrics strong {
+  font-size: .82rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .transcript-drawer {
   border: 1px solid var(--line);
   border-radius: 8px;
