@@ -56,6 +56,10 @@ for (const token of [
   "screen.perception_ended",
   "renderVoiceMetrics",
   "voiceMetricsDetail",
+  "renderMissionDecision",
+  "mission-decision-card",
+  "runMissionDecisionAction",
+  "Decisao agora",
   "renderNowHud",
   "nowHudFact",
   "runNowAction",
@@ -150,6 +154,7 @@ for (const token of [
   "council-briefing-grid",
   "council-briefing-block",
   "council-artifact-note",
+  "mission-decision-card",
   "confidence-low",
   "@media (max-width: 560px)"
 ]) {

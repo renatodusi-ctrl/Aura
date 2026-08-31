@@ -1684,7 +1684,7 @@ function renderActiveDemand() {
 
   const mode = document.createElement("span");
   mode.className = "active-demand-mode";
-  mode.textContent = `${labelForJobMode(job.mode)} · ${labelForPolicy(job.policyLevel)}`;
+  mode.textContent = `#${job.id} · ${labelForJobMode(job.mode)} · ${labelForPolicy(job.policyLevel)}`;
 
   const head = document.createElement("div");
   head.className = "active-demand-head";
@@ -1693,17 +1693,7 @@ function renderActiveDemand() {
   const goal = document.createElement("h3");
   goal.textContent = job.goal;
 
-  const meta = document.createElement("p");
-  meta.className = "active-demand-meta";
-  meta.textContent = `Demanda #${job.id} · ${labelForJobMode(job.mode)} · ${labelForPolicy(job.policyLevel)}`;
-
-  const next = document.createElement("p");
-  next.className = "active-demand-next";
-  const nextLabel = document.createElement("strong");
-  nextLabel.textContent = "Proximo passo";
-  const nextText = document.createElement("span");
-  nextText.textContent = nextStepForJob(job);
-  next.append(nextLabel, nextText);
+  const decision = renderMissionDecision(job);
 
   const tabs = document.createElement("div");
   tabs.className = "active-demand-tabs";
@@ -1761,7 +1751,7 @@ function renderActiveDemand() {
 
   if (state.activeDemandTab === "council") {
     const councilPanel = renderActiveDemandCouncil(job);
-    els.activeDemand.append(head, goal, meta, tabs, councilPanel, action);
+    els.activeDemand.append(head, goal, tabs, councilPanel, action);
     return;
   }
 
@@ -1776,7 +1766,7 @@ function renderActiveDemand() {
     list.className = "job-events";
     list.replaceChildren(...(state.selectedJobEvents.length ? state.selectedJobEvents.map(renderJobEvent) : []));
     technical.append(copy, list);
-    els.activeDemand.append(head, goal, meta, tabs, technical, action);
+    els.activeDemand.append(head, goal, tabs, technical, action);
     return;
   }
 
@@ -1791,7 +1781,7 @@ function renderActiveDemand() {
       empty.textContent = "Sem artefatos para esta demanda ainda.";
       panel.append(empty);
     }
-    els.activeDemand.append(head, goal, meta, tabs, panel, action);
+    els.activeDemand.append(head, goal, tabs, panel, action);
     return;
   }
 
@@ -1805,7 +1795,7 @@ function renderActiveDemand() {
   const security = renderSecurityBand(job);
   const alert = renderHumanFailure(job);
   const implementationEvidence = renderImplementationEvidence(job);
-  els.activeDemand.append(head, goal, meta, next);
+  els.activeDemand.append(head, goal, decision);
   if (security) {
     els.activeDemand.append(security);
   }
@@ -1816,6 +1806,87 @@ function renderActiveDemand() {
     els.activeDemand.append(implementationEvidence);
   }
   els.activeDemand.append(tabs, details, action);
+}
+
+function renderMissionDecision(job) {
+  const panel = document.createElement("section");
+  panel.className = "mission-decision-card";
+  panel.dataset.state = job.status;
+
+  const body = document.createElement("div");
+  const label = document.createElement("span");
+  label.textContent = "Decisao agora";
+  const text = document.createElement("strong");
+  text.textContent = nextStepForJob(job);
+  const detail = document.createElement("small");
+  detail.textContent = missionDecisionDetail(job);
+  body.append(label, text, detail);
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = missionDecisionButtonClass(job);
+  button.textContent = missionDecisionButtonLabel(job);
+  button.addEventListener("click", () => runMissionDecisionAction(job, button));
+
+  panel.append(body, button);
+  return panel;
+}
+
+function missionDecisionDetail(job) {
+  if (job.status === "needs_input") {
+    return "Aguardando sua decisao antes de qualquer proximo passo.";
+  }
+  if (job.status === "failed") {
+    return "Falha degradada com historico preservado para retomar com seguranca.";
+  }
+  if (job.status === "done") {
+    return "Entrega concluida; revise artefatos ou escolha a continuidade.";
+  }
+  if (canConfirmImplementJob(job)) {
+    return "Permissao visual obrigatoria antes de escrita local.";
+  }
+  return "CTA sincronizada com o estado Agora do cockpit.";
+}
+
+function missionDecisionButtonLabel(job) {
+  if (state.now?.activeJob?.id === job.id && state.now.cta?.label) {
+    return state.now.cta.label;
+  }
+  if (canConfirmImplementJob(job)) {
+    return "Aprovar";
+  }
+  if (job.status === "needs_input") {
+    return "Resolver";
+  }
+  if (job.status === "failed") {
+    return "Revisar";
+  }
+  if (job.status === "done") {
+    return "Ver entrega";
+  }
+  return "Acompanhar";
+}
+
+function missionDecisionButtonClass(job) {
+  if (job.status === "failed") {
+    return "danger-button";
+  }
+  if (canConfirmImplementJob(job) || state.now?.activeJob?.id === job.id) {
+    return "primary";
+  }
+  return "secondary";
+}
+
+async function runMissionDecisionAction(job, button) {
+  if (state.now?.activeJob?.id === job.id) {
+    await runNowAction(state.now, button);
+    return;
+  }
+  const panel = document.querySelector(".jobs-panel");
+  if (panel) {
+    panel.open = true;
+  }
+  document.querySelector(".jobs-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderMissionStarters() {
