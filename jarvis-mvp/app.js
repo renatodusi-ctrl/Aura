@@ -57,6 +57,7 @@ const els = {
   routineToggle: document.querySelector("#routine-toggle"),
   voiceButton: document.querySelector("#voice-button"),
   screenButton: document.querySelector("#screen-button"),
+  attachScreenEvidenceButton: document.querySelector("#attach-screen-evidence-button"),
   stopScreenButton: document.querySelector("#stop-screen-button"),
   localForm: document.querySelector("#local-form"),
   localInput: document.querySelector("#local-input"),
@@ -266,6 +267,7 @@ function bindEvents() {
   });
 
   els.screenButton.addEventListener("click", startScreenCapture);
+  els.attachScreenEvidenceButton.addEventListener("click", attachScreenEvidenceToJob);
   els.stopScreenButton.addEventListener("click", stopScreenCapture);
   els.costsRefreshButton.addEventListener("click", refreshCosts);
   els.localFilesRefreshButton?.addEventListener("click", refreshLocalFiles);
@@ -1536,6 +1538,7 @@ function openSessionPanel(tabName) {
 
 function renderActiveDemand() {
   els.activeDemand.replaceChildren();
+  updateScreenEvidenceButton();
 
   if (!state.selectedJob) {
     const empty = document.createElement("div");
@@ -3043,6 +3046,25 @@ function renderArtifactCard(artifact) {
   });
 
   actions.append(details, copy, use);
+  if (artifact.kind === "screen-evidence") {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "danger-button";
+    remove.textContent = "Remover evidencia";
+    remove.addEventListener("click", async () => {
+      if (!confirm("Remover esta evidencia visual da demanda?")) {
+        return;
+      }
+      await withBusyButton(remove, "Removendo", async () => {
+        const result = await api(`/api/jobs/${artifact.jobId}/artifacts/${artifact.id}?confirm=true`, { method: "DELETE" });
+        state.selectedJobEvents = result.events || [];
+        state.selectedJobArtifacts = result.artifacts || [];
+        await refreshJobs();
+        appendMessage("system", "Evidencia visual removida da demanda.");
+      });
+    });
+    actions.append(remove);
+  }
   card.append(header, preview, actions);
   return card;
 }
@@ -3057,6 +3079,7 @@ function labelForArtifactKind(kind) {
     "diff": "Diff do workspace",
     "changed-files": "Arquivos alterados",
     "test-log": "Resultado de testes",
+    "screen-evidence": "Evidencia visual",
     "critic-review": "Critica local",
     "rollback-plan": "Plano de rollback",
     "independent-critic-brief": "Brief de critica independente",
@@ -3079,6 +3102,9 @@ function artifactSummary(artifact) {
   if (artifact.kind === "test-log") {
     const exitCode = artifact.metadata?.exitCode;
     return exitCode === 0 ? "Testes passaram." : `Testes exigem atencao${exitCode === undefined ? "" : `: exit ${exitCode}`}.`;
+  }
+  if (artifact.kind === "screen-evidence") {
+    return "Tela considerada com consentimento explicito; imagem crua nao foi persistida.";
   }
   if (artifact.kind === "critic-review") {
     const gate = artifact.metadata?.gate;
@@ -3719,12 +3745,24 @@ function canRunAnalystsJob(job) {
 
 function analystContext(job) {
   const metadata = job.metadata || {};
+  const visualEvidence = screenEvidenceContextForJob();
+  const findings = Array.isArray(metadata.findings)
+    ? metadata.findings
+    : metadata.findings ? [String(metadata.findings)] : [];
   return {
     constraints: metadata.constraints,
     files: metadata.files || metadata.likelyFiles,
-    findings: metadata.findings,
+    findings: [...findings, ...visualEvidence],
     attempted: metadata.attempted
   };
+}
+
+function screenEvidenceContextForJob() {
+  return state.selectedJobArtifacts
+    .filter((artifact) => artifact.kind === "screen-evidence")
+    .map((artifact) => artifact.content || artifact.metadata?.summary || "")
+    .filter(Boolean)
+    .map((content) => `Evidencia visual consentida considerada: ${content}`);
 }
 
 function buildAnalystPreview(job) {
@@ -3741,6 +3779,10 @@ function buildAnalystPreview(job) {
   const files = Array.isArray(context.files) ? context.files : [];
   if (files.length) {
     lines.push(`Files: ${files.join(", ")}`);
+  }
+  const findings = Array.isArray(context.findings) ? context.findings : [];
+  if (findings.some((item) => /Evidencia visual consentida/.test(item))) {
+    lines.push("Visual evidence: included with explicit user consent.");
   }
   return lines.join("\n");
 }
@@ -3937,6 +3979,7 @@ async function startScreenCapture() {
     els.screenVideo.srcObject = state.screenStream;
     els.screenVideo.hidden = false;
     els.stopScreenButton.hidden = false;
+    updateScreenEvidenceButton();
     renderLocalContextSummary();
     state.screenStream.getVideoTracks()[0].addEventListener("ended", stopScreenCapture);
   } catch (error) {
@@ -3949,8 +3992,56 @@ function stopScreenCapture() {
   state.screenStream = null;
   els.screenVideo.srcObject = null;
   els.screenVideo.hidden = true;
+  els.attachScreenEvidenceButton.hidden = true;
   els.stopScreenButton.hidden = true;
   renderLocalContextSummary();
+}
+
+async function attachScreenEvidenceToJob() {
+  if (!state.screenStream || els.screenVideo.hidden) {
+    appendMessage("system", "Inicie a captura de tela antes de anexar evidencia.");
+    return;
+  }
+  if (!state.selectedJob) {
+    appendMessage("system", "Selecione uma demanda antes de anexar evidencia visual.");
+    return;
+  }
+  if (!confirm(`Anexar a tela atual como evidencia resumida da demanda #${state.selectedJob.id}? A imagem crua nao sera persistida.`)) {
+    return;
+  }
+
+  const width = els.screenVideo.videoWidth || 0;
+  const height = els.screenVideo.videoHeight || 0;
+  const summary = [
+    `Tela capturada pelo operador para a demanda #${state.selectedJob.id}.`,
+    `Estado do cockpit: ${state.now?.headline || state.selectedJob.status}.`,
+    "AURA deve considerar esta evidencia visual como contexto consentido."
+  ].join(" ");
+
+  await withBusyButton(els.attachScreenEvidenceButton, "Anexando", async () => {
+    try {
+      const result = await api(`/api/jobs/${state.selectedJob.id}/screen-evidence`, {
+        method: "POST",
+        body: {
+          confirmed: true,
+          width,
+          height,
+          summary
+        }
+      });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      state.selectedJobArtifacts = result.artifacts || [];
+      await refreshJobs();
+      appendMessage("system", `Evidencia visual anexada a demanda #${state.selectedJob.id}.`);
+    } catch (error) {
+      appendMessage("system", `Evidencia visual nao anexada: ${humanizeJobMessage(error.message, error.details)}`);
+    }
+  });
+}
+
+function updateScreenEvidenceButton() {
+  els.attachScreenEvidenceButton.hidden = !state.screenStream || !state.selectedJob;
 }
 
 function setVoiceStatus(status) {

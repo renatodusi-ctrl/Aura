@@ -29,6 +29,10 @@ Job goals, job event messages, job event data, job metadata and tool run input/o
 
 Screen capture uses the browser `getDisplayMedia` prompt. It is opt-in per session and can be stopped from the cockpit or browser controls.
 
+Screen content becomes job evidence only after a second explicit action: `Anexar a demanda`.
+AURA stores a redacted textual `screen-evidence` artifact with dimensions and consent metadata; the raw image frame is not persisted.
+The artifact is visible in the demand artifacts tab and can be removed by the user with confirmation.
+
 ## Routine
 
 The daily routine runs only while the cockpit is open and the toggle is enabled.

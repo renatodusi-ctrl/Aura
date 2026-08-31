@@ -17,6 +17,8 @@ import {
   deleteTask,
   getTask,
   createJob,
+  createJobArtifact,
+  deleteJobArtifact,
   getJob,
   listJobArtifacts,
   listJobEvents,
@@ -234,6 +236,15 @@ async function route(req, res) {
 
   if (jobRoute && method === "POST" && jobRoute.action === "debate/synthesize") {
     return debateSynthesizeRoute(jobRoute.id, req, res);
+  }
+
+  if (jobRoute && method === "POST" && jobRoute.action === "screen-evidence") {
+    return attachScreenEvidenceRoute(jobRoute.id, req, res);
+  }
+
+  const artifactRoute = matchJobArtifactRoute(url.pathname);
+  if (artifactRoute && method === "DELETE") {
+    return removeScreenEvidenceRoute(artifactRoute.jobId, artifactRoute.artifactId, url, res);
   }
 
   if (url.pathname === "/api/memories" && method === "GET") {
@@ -867,6 +878,66 @@ function skipJobRoute(id, res) {
   }
 }
 
+async function attachScreenEvidenceRoute(id, req, res) {
+  try {
+    const job = getJob(id);
+    if (!job) {
+      throw httpError(404, "Job not found.");
+    }
+    const body = await readJson(req);
+    if (body.confirmed !== true) {
+      throw httpError(400, "Screen evidence requires explicit user confirmation.");
+    }
+
+    const summary = redactText(String(body.summary || body.note || "Tela capturada com consentimento do usuario.").trim());
+    const artifact = createJobArtifact(job.id, {
+      kind: "screen-evidence",
+      label: "Evidencia visual consentida",
+      content: [
+        "Evidencia visual considerada com consentimento explicito.",
+        `Resumo: ${summary}`,
+        `Dimensoes: ${Number(body.width) || 0}x${Number(body.height) || 0}`,
+        `Capturada em: ${new Date().toISOString()}`,
+        "Imagem crua nao foi persistida para reduzir exposicao de dados sensiveis."
+      ].join("\n"),
+      metadata: {
+        consent: "explicit",
+        source: "browser-getDisplayMedia",
+        redacted: true,
+        rawImagePersisted: false,
+        width: Number(body.width) || 0,
+        height: Number(body.height) || 0,
+        summary
+      }
+    });
+    recordJobEvent(job.id, "screen.evidence_attached", "Screen evidence attached with explicit consent.", {
+      artifactId: artifact.id,
+      rawImagePersisted: false
+    });
+    rememberJobEvent(getJob(job.id), "screen_evidence");
+    return sendJson(res, 201, { job: getJob(job.id), artifact, events: listJobEvents(job.id), artifacts: listJobArtifacts(job.id) });
+  } catch (error) {
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not attach screen evidence."));
+  }
+}
+
+function removeScreenEvidenceRoute(jobId, artifactId, url, res) {
+  try {
+    if (url.searchParams.get("confirm") !== "true") {
+      throw httpError(400, "Removing screen evidence requires confirm=true.");
+    }
+    const removed = deleteJobArtifact(jobId, artifactId, { allowedKinds: ["screen-evidence"] });
+    recordJobEvent(jobId, "screen.evidence_removed", "Screen evidence removed by user.", {
+      artifactId,
+      rawImagePersisted: false
+    });
+    rememberJobEvent(getJob(jobId), "screen_evidence_removed");
+    return sendJson(res, 200, { ...removed, events: listJobEvents(jobId), artifacts: listJobArtifacts(jobId) });
+  } catch (error) {
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not remove screen evidence."));
+  }
+}
+
 async function resetProviderCircuitRoute(provider, req, res) {
   try {
     const body = await readJson(req);
@@ -1075,13 +1146,24 @@ function policyLevelForJobMode(mode, policyLevel) {
 }
 
 function matchJobRoute(pathname) {
-  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|skip|approve|codex\/ask|codex\/implement|analysts\/preview|analysts\/run|debate\/synthesize))?$/);
+  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|skip|approve|codex\/ask|codex\/implement|analysts\/preview|analysts\/run|debate\/synthesize|screen-evidence))?$/);
   if (!match) {
     return null;
   }
   return {
     id: Number(match[1]),
     action: match[2] || null
+  };
+}
+
+function matchJobArtifactRoute(pathname) {
+  const match = pathname.match(/^\/api\/jobs\/(\d+)\/artifacts\/(\d+)$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    jobId: Number(match[1]),
+    artifactId: Number(match[2])
   };
 }
 

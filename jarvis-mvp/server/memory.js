@@ -750,6 +750,29 @@ export function createJobArtifact(jobId, { kind, label, content = "", metadata =
   return formatJobArtifact(artifact);
 }
 
+export function deleteJobArtifact(jobId, artifactId, { allowedKinds = [] } = {}) {
+  const artifact = db.prepare(`
+    SELECT id, job_id AS jobId, kind, label
+    FROM job_artifacts
+    WHERE id = ? AND job_id = ?
+  `).get(Number(artifactId), Number(jobId));
+
+  if (!artifact) {
+    throw new Error("Artifact not found.");
+  }
+  if (allowedKinds.length && !allowedKinds.includes(artifact.kind)) {
+    throw new Error(`Artifact ${artifact.kind} cannot be removed by this route.`);
+  }
+
+  const result = db.prepare("DELETE FROM job_artifacts WHERE id = ? AND job_id = ?").run(Number(artifactId), Number(jobId));
+  insertJobEvent(jobId, "job.artifact_removed", `Artifact removed: ${artifact.label}.`, {
+    artifactId: artifact.id,
+    kind: artifact.kind,
+    label: artifact.label
+  });
+  return { deleted: result.changes > 0, artifact: formatJobArtifact({ ...artifact, metadata: "{}", content: "", createdAt: null }) };
+}
+
 export function listJobArtifacts(jobId) {
   return db.prepare(`
     SELECT

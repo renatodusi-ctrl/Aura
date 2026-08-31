@@ -96,6 +96,44 @@ try {
   assert.equal(listed.status, 200);
   assert.ok(listed.data.jobs.some((job) => job.id === created.data.job.id));
 
+  const screenEvidenceDenied = await request(`/api/jobs/${created.data.job.id}/screen-evidence`, {
+    method: "POST",
+    headers,
+    body: { confirmed: false, summary: "should not attach" }
+  });
+  assert.equal(screenEvidenceDenied.status, 400);
+
+  const screenEvidence = await request(`/api/jobs/${created.data.job.id}/screen-evidence`, {
+    method: "POST",
+    headers,
+    body: {
+      confirmed: true,
+      width: 1280,
+      height: 720,
+      summary: "Tela do cockpit com OPENAI_API_KEY=sk-proj-screen-secret"
+    }
+  });
+  assert.equal(screenEvidence.status, 201);
+  assert.equal(screenEvidence.data.artifact.kind, "screen-evidence");
+  assert.equal(screenEvidence.data.artifact.metadata.rawImagePersisted, false);
+  assert.doesNotMatch(screenEvidence.data.artifact.content, /sk-proj-screen-secret/);
+  assert.ok(screenEvidence.data.events.some((event) => event.type === "screen.evidence_attached"));
+
+  const screenEvidenceRemoveDenied = await request(`/api/jobs/${created.data.job.id}/artifacts/${screenEvidence.data.artifact.id}`, {
+    method: "DELETE",
+    headers
+  });
+  assert.equal(screenEvidenceRemoveDenied.status, 400);
+
+  const screenEvidenceRemoved = await request(`/api/jobs/${created.data.job.id}/artifacts/${screenEvidence.data.artifact.id}?confirm=true`, {
+    method: "DELETE",
+    headers
+  });
+  assert.equal(screenEvidenceRemoved.status, 200);
+  assert.equal(screenEvidenceRemoved.data.deleted, true);
+  assert.ok(screenEvidenceRemoved.data.events.some((event) => event.type === "screen.evidence_removed"));
+  assert.ok(!screenEvidenceRemoved.data.artifacts.some((artifact) => artifact.id === screenEvidence.data.artifact.id));
+
   const missingCli = await request(`/api/jobs/${created.data.job.id}/codex/ask`, {
     method: "POST",
     headers,
