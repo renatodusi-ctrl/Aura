@@ -34,7 +34,7 @@ It converts the fixed scenarios into evidence checks against code, smoke tests, 
 The generated report is written to `exports/jarvis-rubric-report.json` with:
 
 - `score`: current weighted score from 0 to 10.
-- `target`: minimum score for this wave, currently `6.5`.
+- `target`: minimum score for this wave, currently `10`.
 - `scenarios`: S1-S6 with missing evidence when a scenario regresses.
 - `dimensions`: reliability, presence, action, memory, perception and fluency.
 - `blockers`: P0 regressions that prevent the wave from advancing.
@@ -52,10 +52,12 @@ Non-P0 misses remain in the report as the next maturity gaps, so a passing wave 
 
 ## Current Target
 
-The current wave targets 6.5/10 by improving:
+The current wave targets 10/10 by requiring every JARVIS scenario and maturity criterion to have executable evidence:
 
-- Conselho anti-hang and provider circuit breaker;
-- progressive debate rounds;
-- `/api/now` as a single source for the visible and speakable state;
-- a persistent `Agora` HUD;
-- tests for canceling a hanging analyst through the HTTP route.
+- reliable Conselho execution with cancellation, SLO and circuit breaker controls;
+- natural voice presence with wake word, fallback honesty, barge-in and turn-taking telemetry;
+- `/api/now` as the single visible and speakable source for mission, decision and CTA;
+- Conselho-to-Codex implementation with visual confirmation, critic review and rollback guidance;
+- SQLite memory, preferences and short session continuity;
+- consented screen perception with expiration, stop controls and purgeable evidence;
+- a repeatable operator demo that can be seeded, verified and recorded without exposing secrets.

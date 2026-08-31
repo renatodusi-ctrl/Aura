@@ -1,6 +1,7 @@
 node_modules/
 .env
 data/
+demo-workspace/
 exports/
 *.log
 .DS_Store

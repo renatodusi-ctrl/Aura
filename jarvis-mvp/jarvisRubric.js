@@ -1,4 +1,4 @@
-export const JARVIS_TARGET_SCORE = 6.5;
+export const JARVIS_TARGET_SCORE = 10;
 
 export const JARVIS_DIMENSIONS = [
   {

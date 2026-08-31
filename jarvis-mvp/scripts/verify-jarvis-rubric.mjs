@@ -6,13 +6,17 @@ import { evaluateJarvisRubric, JARVIS_SCENARIOS, JARVIS_TARGET_SCORE } from "../
 const root = path.resolve(import.meta.dirname, "..");
 const sources = readSources({
   app: "app.js",
+  demoDoc: "docs/DEMO_JARVIS.md",
+  demoSuite: "scripts/verify-demo-suite.mjs",
   packageJson: "package.json",
   realtime: "realtime.js",
+  screenPerception: "screenPerception.js",
   nowNarration: "nowNarration.js",
   councilPlan: "councilPlan.js",
   councilBriefing: "councilBriefing.js",
   proactive: "proactive.js",
   slo: "slo.js",
+  voiceRuntime: "voiceRuntime.js",
   index: "server/index.js",
   memory: "server/memory.js",
   tools: "server/tools.js",
@@ -34,6 +38,7 @@ const sources = readSources({
   voiceHealthVerifier: "scripts/verify-voice-health.mjs",
   nowNarrationVerifier: "scripts/verify-now-narration.mjs",
   proactiveVerifier: "scripts/verify-proactive.mjs",
+  jobsDoc: "docs/JOBS.md",
   testingDoc: "docs/TESTING.md",
   rubricDoc: "docs/JARVIS_RUBRIC.md",
   securityDoc: "docs/SECURITY_PRIVACY.md"
@@ -87,6 +92,9 @@ function collectEvidence(text, report) {
     criticReview: hasEvery(text.codexAdapter, ["critic-review", "Quality gate", "criticGateFor"]),
     debateSynthesisLookup: hasEvery(text.index, ["latestDebateSynthesisForJob", "latestDebateSynthesisAcross"]),
     debateSynthesisShape: hasEvery(text.debateSynthesizer, ["consensus", "dissent", "risks", "unverified", "recommendation"]),
+    demoScenarioSuite: hasEvery(text.demoDoc, ["Voice Standby", "Mission HUD", "Conselho Decision", "Confirmable Implementation", "Privacy Controls", "Re-score", "Recording Checklist"])
+      && hasEvery(text.demoSuite, ["demo-seed.mjs", "voice-standby", "council-briefing", "confirmable-implementation", "privacy-recovery"])
+      && verifyIncludes("verify-demo-suite.mjs"),
     diffArtifact: hasEvery(text.codexAdapter, ["kind: \"diff\"", "git\", [\"diff\"", "changed-files"]),
     evidenceBrief: hasEvery(text.analystAdapter, ["buildEvidenceBrief", "evidence-brief"]),
     idleNowHeadline: hasEvery(text.index, ["Nenhuma demanda ativa", "Criar missao"]),
@@ -106,20 +114,31 @@ function collectEvidence(text, report) {
     progressiveDebateVerifier: verifyIncludes("verify-progressive-debate.mjs") && hasEvery(text.progressiveVerifier, ["dissent", "roundsUsed"]),
     providerStatusApi: hasEvery(text.index, ["getProviderPreflight", "providers", "status: \"circuit_open\""]),
     rollbackPlan: hasEvery(text.codexAdapter, ["rollback-plan", "Safe Rollback Plan"]),
+    rollbackFromCockpit: hasEvery(text.app, ["plan-critique-input", "/pause", "/revise", "rollback-plan", "Retomar execucao"])
+      && hasEvery(text.jobsUi, ["rollback-plan", "/pause", "/revise", "operatorCritique"])
+      && hasEvery(text.jobsDoc, ["pause", "critique", "rollback", "resume"]),
     screenCaptureConsent: hasEvery(text.app, ["screen.capture.intent", "getDisplayMedia", "confirmed: true"]),
     screenCaptureStop: hasEvery(text.app, ["stopScreenCapture", "getTracks", "track.stop"]),
     screenEvidenceDocs: hasEvery(text.securityDoc, ["Screen capture", "getDisplayMedia", "opt-in"]),
+    continuousConsentedPerception: hasEvery(text.screenPerception, ["createScreenPerception", "expiresAt", "finishScreenPerception", "rawFramesPersisted: false"])
+      && hasEvery(text.app, ["screenPerceptionTimer", "screen-duration-select", "stopScreenCapture", "screen.perception_ended"])
+      && hasEvery(text.jobsUi, ["screen-perception-status", "screen-duration-select", "screen.perception_ended"]),
     speakableNow: hasEvery(text.nowNarration, ["buildSpeakableNow", "MAX_SPOKEN_CHARS", "NARRATABLE_STATES"]),
     sqliteMemory: hasEvery(text.memory, ["DatabaseSync", "CREATE TABLE IF NOT EXISTS memories", "CREATE TABLE IF NOT EXISTS jobs"]),
     voiceChip: hasEvery(text.app, ["standby por wake word", "realtimeEnabled", "realtimeVoice"]),
     voiceFallbackReason: hasEvery(text.voiceHealth, ["fallbackReason", "configuration_error"]),
     voiceHealthEndpoint: hasEvery(text.index, ["/api/voice/health", "buildVoiceHealth"]),
+    bargeInTurnTaking: hasEvery(text.voiceRuntime, ["barge-in", "late-response-dropped", "classifyTurnTaking", "summary_request"])
+      && hasEvery(text.realtime, ["interruptAssistant", "stopAssistantAudio", "aura.voice.barge_in"])
+      && hasEvery(text.jobsUi, ["aura.voice.barge_in", "late-response-dropped"]),
     voiceIntentBlockers: hasEvery(text.voiceIntents, ["job.blockers", "jobBlockersForVoice"]),
     voiceIntentDecision: hasEvery(text.voiceIntents, ["job.decision", "jobDecisionForVoice"]),
     voiceIntentNextStep: hasEvery(text.voiceIntents, ["job.next_step", "jobNextStepForVoice"]),
     voiceJobStatus: hasEvery(text.voiceIntents, ["job.status", "jobStatusForVoice"]),
     visualConfirmation: hasEvery(text.codexAdapter, ["explicit visual confirmation", "assertImplementJob", "confirmed"]),
-    workspaceWriteSandbox: hasEvery(text.codexAdapter, ["workspace-write", "--sandbox"])
+    workspaceWriteSandbox: hasEvery(text.codexAdapter, ["workspace-write", "--sandbox"]),
+    operatorReadyDemo: hasEvery(text.demoDoc, ["Setup", "Recovery", "Success", "Recording Checklist", "No real API keys on screen"])
+      && hasEvery(text.demoSuite, ["payload.scenes.length", "voice-standby", "privacy-recovery"])
   };
 }
 
