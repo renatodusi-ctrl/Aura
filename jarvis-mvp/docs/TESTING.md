@@ -24,6 +24,16 @@ The fast SLO gate also runs inside `npm run verify` with fewer samples. The P0 t
 - zero stuck local job processes after cancellation.
 - zero inconsistent status/now snapshots.
 
+## JARVIS Rubric Gate
+
+```powershell
+node scripts\verify-jarvis-rubric.mjs
+```
+
+The rubric gate scores AURA against six fixed scenarios: current-state briefing, Conselho briefing, decision/blocker/next-step intents, Conselho-to-implementation handoff, hanging-analysis cancellation and realtime status consistency.
+
+It writes `exports/jarvis-rubric-report.json`. Read `score` for the current 0-10 score, `dimensions` for the weaker product areas and `blockers` for P0 regressions that stop the wave. `npm run verify` runs the short presence SLO first, then this gate, so reliability data is fresh.
+
 ## Manual Smoke Test
 
 1. Run `scripts\run.ps1`.

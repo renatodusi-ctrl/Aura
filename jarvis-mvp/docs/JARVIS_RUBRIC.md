@@ -26,6 +26,22 @@ Any hanging job in the scenario run caps the total score at 6.0, even if other d
 5. Cancel a hanging analysis and verify no job remains `running`.
 6. Compare realtime on/off state with `/api/status` and the cockpit chip.
 
+## Automated Gate
+
+The executable gate lives in `jarvisRubric.js` and runs through `scripts/verify-jarvis-rubric.mjs`.
+It converts the fixed scenarios into evidence checks against code, smoke tests, the presence SLO report and product documentation.
+
+The generated report is written to `exports/jarvis-rubric-report.json` with:
+
+- `score`: current weighted score from 0 to 10.
+- `target`: minimum score for this wave, currently `6.5`.
+- `scenarios`: S1-S6 with missing evidence when a scenario regresses.
+- `dimensions`: reliability, presence, action, memory, perception and fluency.
+- `blockers`: P0 regressions that prevent the wave from advancing.
+
+The gate fails when any P0 scenario or P0 criterion is missing, or when the weighted score is below target. This keeps progress tied to verifiable product behavior instead of a manual impression of the cockpit.
+Non-P0 misses remain in the report as the next maturity gaps, so a passing wave can still show work left before the full product target.
+
 ## Scoring Scale
 
 - `0`: absent or misleading.
