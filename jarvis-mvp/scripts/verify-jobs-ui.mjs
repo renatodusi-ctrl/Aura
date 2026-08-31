@@ -5,6 +5,7 @@ import path from "node:path";
 const root = path.resolve(import.meta.dirname, "..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
+const css = fs.readFileSync(path.join(root, "styles.css"), "utf8");
 
 for (const id of ["now-hud", "proactive-suggestion", "job-list", "job-detail", "jobs-refresh-button"]) {
   assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
@@ -66,6 +67,10 @@ for (const token of [
   "debate/synthesize",
   "synthesizeCouncilDecision",
   "renderCouncilDecisionCard",
+  "buildExecutiveCouncilBriefing",
+  "council-briefing-grid",
+  "Divergencias com impacto",
+  "Ver artefatos",
   "renderCouncilDecisionActions",
   "renderCouncilImplementationPlanPreview",
   "buildCouncilImplementationPlan",
@@ -94,6 +99,16 @@ for (const token of [
   "Descartar"
 ]) {
   assert.match(app, new RegExp(token), `Missing jobs UI token: ${token}`);
+}
+
+for (const token of [
+  "council-briefing-grid",
+  "council-briefing-block",
+  "council-artifact-note",
+  "confidence-low",
+  "@media (max-width: 560px)"
+]) {
+  assert.ok(css.includes(token), `Missing jobs UI CSS token: ${token}`);
 }
 
 console.log("Jobs UI verification passed.");

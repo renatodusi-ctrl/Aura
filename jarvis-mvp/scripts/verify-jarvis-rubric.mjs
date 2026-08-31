@@ -10,6 +10,7 @@ const sources = readSources({
   realtime: "realtime.js",
   nowNarration: "nowNarration.js",
   councilPlan: "councilPlan.js",
+  councilBriefing: "councilBriefing.js",
   proactive: "proactive.js",
   slo: "slo.js",
   index: "server/index.js",
@@ -78,7 +79,8 @@ function collectEvidence(text, report) {
     cancelRoute: hasEvery(text.index, ["cancelJobRoute", "cancelAnalystJobProcess"]) && has(text.smoke, "/cancel"),
     circuitBreaker: hasEvery(text.analystAdapter, ["analystCircuitState", "circuit_open", "retryAt"]),
     composerIntent: hasEvery(text.app, ["composerIntent", "Aura, organize uma nova missao"]),
-    councilDecisionCard: hasEvery(text.app, ["renderCouncilDecisionCard", "Confianca", "Consenso", "Riscos", "Nao verificado", "Rodadas"]),
+    councilDecisionCard: hasEvery(text.app, ["renderCouncilDecisionCard", "buildExecutiveCouncilBriefing"])
+      && hasEvery(text.councilBriefing, ["Briefing executivo", "Confianca", "Consenso", "Divergencias", "Riscos"]),
     councilImplementationPlan: hasEvery(text.councilPlan, ["buildCouncilImplementationPlan", "implementationGoalFromPlan", "verification"]),
     councilPlanSourceJob: hasEvery(text.councilPlan, ["sourceJobId", "source: \"council-decision\""]),
     criticReview: hasEvery(text.codexAdapter, ["critic-review", "Quality gate", "criticGateFor"]),

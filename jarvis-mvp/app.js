@@ -5,6 +5,7 @@ import {
   implementationEvidenceFromArtifacts,
   implementationGoalFromPlan
 } from "./councilPlan.js";
+import { buildExecutiveCouncilBriefing } from "./councilBriefing.js";
 import { buildProactiveSuggestion, recordProactiveDecision } from "./proactive.js";
 
 const state = {
@@ -1954,24 +1955,55 @@ function renderCouncilDecisionCard() {
   }
   const job = state.selectedJob;
   const plan = job ? buildCouncilImplementationPlan(job, synthesis) : null;
+  const briefing = buildExecutiveCouncilBriefing(synthesis, plan);
 
   const card = document.createElement("section");
-  card.className = "council-decision";
+  card.className = `council-decision confidence-${briefing.confidence.level}`;
+
+  const header = document.createElement("header");
+  const heading = document.createElement("div");
   const label = document.createElement("strong");
-  label.textContent = "Decisao do Conselho";
+  label.textContent = briefing.title;
   const recommendation = document.createElement("p");
-  recommendation.textContent = synthesis.recommendation || "Conselho sem recomendacao textual.";
+  recommendation.textContent = briefing.recommendation;
+  heading.append(label, recommendation);
+
+  const confidence = document.createElement("span");
+  confidence.className = "council-confidence";
+  confidence.textContent = `confianca ${briefing.confidence.label}`;
+  header.append(heading, confidence);
 
   const facts = document.createElement("dl");
   facts.className = "council-decision-facts";
-  appendFact(facts, "Confianca", synthesis.confidence || "baixa");
-  appendFact(facts, "Consenso", formatInteger(synthesis.consensus?.length || 0));
-  appendFact(facts, "Riscos", formatInteger(synthesis.risks?.length || 0));
-  appendFact(facts, "Nao verificado", formatInteger(synthesis.unverified?.length || 0));
+  for (const fact of briefing.facts) {
+    appendFact(facts, fact.label, fact.value);
+  }
   appendFact(facts, "Rodadas", debateRoundLabel(synthesis));
   appendFact(facts, "Criterio", progressiveDebateLabel(synthesis));
 
-  card.append(label, recommendation, facts);
+  const executiveGrid = document.createElement("div");
+  executiveGrid.className = "council-briefing-grid";
+  executiveGrid.append(
+    renderBriefingBlock("Opinioes principais", briefing.consensus),
+    renderBriefingBlock("Divergencias com impacto", briefing.dissent),
+    renderBriefingBlock("Riscos", briefing.risks),
+    renderBriefingBlock("Proximas acoes", briefing.nextActions.map((text) => ({ text, sources: [], impact: "" })))
+  );
+
+  const artifactNote = document.createElement("div");
+  artifactNote.className = "council-artifact-note";
+  const artifactText = document.createElement("span");
+  artifactText.textContent = briefing.artifactHint;
+  const artifactButton = document.createElement("button");
+  artifactButton.type = "button";
+  artifactButton.textContent = "Ver artefatos";
+  artifactButton.addEventListener("click", () => {
+    state.activeDemandTab = "artifacts";
+    renderActiveDemand();
+  });
+  artifactNote.append(artifactText, artifactButton);
+
+  card.append(header, facts, executiveGrid, artifactNote);
   if (plan) {
     card.append(renderCouncilImplementationPlanPreview(plan));
   }
@@ -1980,6 +2012,31 @@ function renderCouncilDecisionCard() {
     card.append(actions);
   }
   return card;
+}
+
+function renderBriefingBlock(titleText, items) {
+  const block = document.createElement("section");
+  block.className = "council-briefing-block";
+  const title = document.createElement("strong");
+  title.textContent = titleText;
+  const list = document.createElement("ul");
+  for (const item of items || []) {
+    const entry = document.createElement("li");
+    if (item.muted) {
+      entry.className = "muted";
+    }
+    const text = document.createElement("span");
+    text.textContent = item.text;
+    entry.append(text);
+    if (item.impact || item.sources?.length) {
+      const meta = document.createElement("small");
+      meta.textContent = [item.impact, item.sources?.length ? `Fontes: ${item.sources.join(", ")}` : ""].filter(Boolean).join(" ");
+      entry.append(meta);
+    }
+    list.append(entry);
+  }
+  block.append(title, list);
+  return block;
 }
 
 function debateRoundLabel(synthesis) {
