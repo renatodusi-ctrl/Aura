@@ -54,6 +54,12 @@ try {
   assert.equal(now.status, 200);
   assert.ok(now.data.now.nextStep);
   assert.ok(now.data.now.realtime);
+  assert.ok(now.data.now.actionId);
+  assert.ok(now.data.now.source);
+  assert.ok(["high", "medium", "low"].includes(now.data.now.confidence));
+  assert.ok(["info", "notice", "active", "warning", "success", "critical", "muted"].includes(now.data.now.severity));
+  assert.ok(["idle", "running", "blocked", "failed", "cancelled", "completed"].includes(now.data.now.state));
+  assert.equal(now.data.now.cta.actionId, now.data.now.actionId);
 
   const created = await request("/api/jobs", {
     method: "POST",

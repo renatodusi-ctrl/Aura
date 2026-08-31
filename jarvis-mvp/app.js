@@ -533,6 +533,9 @@ function renderNowHud() {
     return;
   }
   els.nowHud.hidden = false;
+  els.nowHud.dataset.state = now.state || "idle";
+  els.nowHud.dataset.severity = now.severity || "info";
+  els.nowHud.dataset.source = now.source || "operator";
 
   const title = document.createElement("div");
   title.className = "now-hud-main";
@@ -548,7 +551,7 @@ function renderNowHud() {
   facts.className = "now-hud-facts";
   facts.append(
     nowHudFact("Voz", now.realtime?.label || "Voz local"),
-    nowHudFact("Conselho", now.councilDecision ? `${now.councilDecision.roundsUsed || 1} rodada(s)` : "sem decisao ativa"),
+    nowHudFact("Estado", labelForNowState(now.state)),
     nowHudFact("Bloqueios", formatInteger(now.blockers?.length || 0))
   );
 
@@ -556,6 +559,8 @@ function renderNowHud() {
   action.type = "button";
   action.className = now.cta?.kind === "cancel" ? "danger-button" : "primary";
   action.textContent = now.cta?.label || "Ver agora";
+  action.dataset.actionId = now.actionId || now.cta?.actionId || "";
+  action.title = `Origem: ${now.source || "operador"} · confianca: ${now.confidence || "media"}`;
   action.disabled = now.cta?.enabled === false;
   action.addEventListener("click", () => runNowAction(now, action));
 
@@ -570,6 +575,18 @@ function nowHudFact(label, value) {
   strong.textContent = value || "-";
   item.append(small, strong);
   return item;
+}
+
+function labelForNowState(state) {
+  const labels = {
+    idle: "calmo",
+    running: "em execucao",
+    blocked: "decisao pendente",
+    failed: "falha",
+    cancelled: "cancelada",
+    completed: "concluida"
+  };
+  return labels[state] || "calmo";
 }
 
 async function runNowAction(now, button) {

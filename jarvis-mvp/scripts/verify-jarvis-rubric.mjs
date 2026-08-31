@@ -29,6 +29,12 @@ for (const token of [
   "/api/now",
   "buildNowSnapshot",
   "nextStepForJob",
+  "nowPresence",
+  "actionId",
+  "source",
+  "confidence",
+  "severity",
+  "jobRef",
   "ctaForJob",
   "normalizeAnalystBudget",
   "progressive"
@@ -38,6 +44,7 @@ for (const token of [
 
 for (const token of [
   "now-hud",
+  "dataset.severity",
   "renderNowHud",
   "runNowAction",
   "progressive: safeRounds > 1"

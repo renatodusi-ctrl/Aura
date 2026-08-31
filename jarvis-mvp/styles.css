@@ -94,6 +94,26 @@ button.secondary {
   background: linear-gradient(180deg, rgba(88, 196, 184, .08), rgba(17, 21, 27, .92));
 }
 
+.now-hud[data-severity="active"] {
+  border-color: rgba(91, 157, 255, .42);
+}
+
+.now-hud[data-severity="warning"] {
+  border-color: rgba(245, 176, 65, .52);
+}
+
+.now-hud[data-severity="critical"] {
+  border-color: rgba(255, 107, 107, .58);
+}
+
+.now-hud[data-severity="success"] {
+  border-color: rgba(124, 232, 159, .42);
+}
+
+.now-hud[data-severity="muted"] {
+  border-color: rgba(127, 140, 160, .36);
+}
+
 .now-hud-main {
   display: grid;
   gap: 3px;

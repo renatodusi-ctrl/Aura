@@ -1067,6 +1067,8 @@ function buildNowSnapshot() {
   const decision = activeJob ? latestDebateSynthesisForJob(activeJob.id) : latestDebateSynthesisAcross(jobs);
   const realtime = voiceStatus();
   const blockers = nowBlockers(activeJob, decision);
+  const cta = ctaForJob(activeJob);
+  const presence = nowPresence(activeJob, tasks, blockers);
   const nextStep = activeJob
     ? nextStepForJob(activeJob, decision)
     : tasks.length
@@ -1075,10 +1077,15 @@ function buildNowSnapshot() {
 
   return {
     generatedAt: new Date().toISOString(),
+    state: presence.state,
+    source: presence.source,
+    confidence: presence.confidence,
+    severity: presence.severity,
+    actionId: cta.actionId,
     headline: activeJob ? `Demanda #${activeJob.id}: ${labelForJobStatus(activeJob.status)}` : "Nenhuma demanda ativa",
     nextStep,
     blockers,
-    cta: ctaForJob(activeJob),
+    cta,
     realtime: {
       enabled: realtime.enabled,
       provider: realtime.provider,
@@ -1088,6 +1095,8 @@ function buildNowSnapshot() {
       detail: realtime.enabled ? `${realtime.model} · voz ${realtime.voice}` : "Configure a chave do provider para conversa ao vivo."
     },
     activeJob: activeJob ? summarizeJob(activeJob) : null,
+    jobRef: activeJob ? nowJobReference(activeJob) : null,
+    demandRef: activeJob ? nowJobReference(activeJob) : null,
     councilDecision: decision ? summarizeDebateSynthesis(decision) : null,
     counts: {
       openTasks: tasks.length,
@@ -1095,6 +1104,61 @@ function buildNowSnapshot() {
       runningJobs: jobs.filter((job) => ["queued", "running"].includes(job.status)).length,
       doneJobs: jobs.filter((job) => job.status === "done").length
     }
+  };
+}
+
+function nowPresence(job, tasks, blockers) {
+  if (!job) {
+    return {
+      state: "idle",
+      source: tasks.length ? "tasks" : "operator",
+      confidence: "high",
+      severity: blockers.length ? "notice" : "info"
+    };
+  }
+
+  const state = nowStateForJob(job.status);
+  return {
+    state,
+    source: "job",
+    confidence: job.status === "running" || job.status === "queued" ? "medium" : "high",
+    severity: nowSeverityForState(state)
+  };
+}
+
+function nowStateForJob(status) {
+  const states = {
+    draft: "blocked",
+    awaiting_confirm: "blocked",
+    queued: "running",
+    running: "running",
+    needs_input: "blocked",
+    done: "completed",
+    failed: "failed",
+    cancelled: "cancelled"
+  };
+  return states[status] || "idle";
+}
+
+function nowSeverityForState(state) {
+  const severities = {
+    idle: "info",
+    running: "active",
+    blocked: "warning",
+    completed: "success",
+    failed: "critical",
+    cancelled: "muted"
+  };
+  return severities[state] || "info";
+}
+
+function nowJobReference(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    mode: job.mode,
+    workspace: job.workspace,
+    updatedAt: job.updatedAt
   };
 }
 
@@ -1201,19 +1265,19 @@ function nextStepForJob(job, decision = null) {
 
 function ctaForJob(job) {
   if (!job) {
-    return { kind: "compose", label: "Criar missao", enabled: true };
+    return { actionId: "compose.new_mission", kind: "compose", label: "Criar missao", enabled: true };
   }
   const ctas = {
-    draft: { kind: "approve", label: "Aprovar draft", enabled: true },
-    awaiting_confirm: { kind: "confirm", label: "Confirmar execucao", enabled: true },
-    queued: { kind: "cancel", label: "Cancelar", enabled: true },
-    running: { kind: "cancel", label: "Cancelar", enabled: true },
-    needs_input: { kind: "recover", label: "Retomar ou ignorar", enabled: true },
-    done: { kind: "review", label: "Ver resultado", enabled: true },
-    failed: { kind: "review", label: "Revisar falha", enabled: true },
-    cancelled: { kind: "none", label: "Nada pendente", enabled: false }
+    draft: { actionId: "job.approve_draft", kind: "approve", label: "Aprovar draft", enabled: true },
+    awaiting_confirm: { actionId: "job.confirm_execution", kind: "confirm", label: "Confirmar execucao", enabled: true },
+    queued: { actionId: "job.cancel", kind: "cancel", label: "Cancelar", enabled: true },
+    running: { actionId: "job.cancel", kind: "cancel", label: "Cancelar", enabled: true },
+    needs_input: { actionId: "job.recover", kind: "recover", label: "Retomar ou ignorar", enabled: true },
+    done: { actionId: "job.review_result", kind: "review", label: "Ver resultado", enabled: true },
+    failed: { actionId: "job.review_failure", kind: "review", label: "Revisar falha", enabled: true },
+    cancelled: { actionId: "job.none", kind: "none", label: "Nada pendente", enabled: false }
   };
-  return ctas[job.status] || { kind: "review", label: "Ver demanda", enabled: true };
+  return ctas[job.status] || { actionId: "job.review", kind: "review", label: "Ver demanda", enabled: true };
 }
 
 function labelForJobStatus(status) {
