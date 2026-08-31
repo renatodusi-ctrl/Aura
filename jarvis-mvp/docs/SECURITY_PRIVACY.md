@@ -28,6 +28,7 @@ Job goals, job event messages, job event data, job metadata and tool run input/o
 ## Screen Capture
 
 Screen capture uses the browser `getDisplayMedia` prompt. It is opt-in per session and can be stopped from the cockpit or browser controls.
+The cockpit treats this as temporary perception: it shows an active indicator, purpose, countdown and immediate stop control. The session is held only in browser memory, expires automatically after the selected duration and is always off after refresh or restart.
 
 Screen content becomes job evidence only after a second explicit action: `Anexar a demanda`.
 AURA stores a redacted textual `screen-evidence` artifact with dimensions and consent metadata; the raw image frame is not persisted.

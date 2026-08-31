@@ -7,6 +7,14 @@ import {
 } from "./councilPlan.js";
 import { buildExecutiveCouncilBriefing } from "./councilBriefing.js";
 import { buildProactiveSuggestion, recordProactiveDecision } from "./proactive.js";
+import {
+  createScreenPerception,
+  finishScreenPerception,
+  formatCountdown,
+  isPerceptionExpired,
+  normalizePerceptionDurationMs,
+  remainingPerceptionMs
+} from "./screenPerception.js";
 
 const state = {
   status: null,
@@ -33,6 +41,9 @@ const state = {
   activeDemandTab: "summary",
   routineEnabled: localStorage.getItem("aura.routineEnabled") === "true",
   screenStream: null,
+  screenPerception: null,
+  screenPerceptionTimer: null,
+  lastPerceptionSummary: "",
   realtime: null,
   narrationEnabled: localStorage.getItem("aura.narrationEnabled") !== "false",
   proactivityEnabled: localStorage.getItem("aura.proactivityEnabled") !== "false",
@@ -59,6 +70,11 @@ const els = {
   screenButton: document.querySelector("#screen-button"),
   attachScreenEvidenceButton: document.querySelector("#attach-screen-evidence-button"),
   stopScreenButton: document.querySelector("#stop-screen-button"),
+  screenDurationSelect: document.querySelector("#screen-duration-select"),
+  screenPerceptionStatus: document.querySelector("#screen-perception-status"),
+  screenPerceptionLabel: document.querySelector("#screen-perception-label"),
+  screenPerceptionPurpose: document.querySelector("#screen-perception-purpose"),
+  screenPerceptionTimer: document.querySelector("#screen-perception-timer"),
   localForm: document.querySelector("#local-form"),
   localInput: document.querySelector("#local-input"),
   localSubmitButton: document.querySelector("#local-submit-button"),
@@ -474,6 +490,7 @@ async function refreshAll() {
   renderCodexActivity();
   renderCommandBrief();
   renderIntegrations();
+  renderScreenPerceptionStatus();
   renderLocalContextSummary();
   renderComposerIntents();
   renderCouncil();
@@ -3740,7 +3757,7 @@ function renderLocalContextSummary() {
     ["Demandas ativas", runningJobs],
     ["Aguardando voce", waitingJobs],
     ["Custo estimado", formatUsd(state.costs?.totals?.estimatedCostUsd || 0)],
-    ["Tela", state.screenStream ? "capturando" : "parada"],
+    ["Percepcao", state.screenPerception ? "ativa" : "parada"],
     ["Retencao", `${state.status.jobHistoryRetentionDays} dias`]
   ];
 
@@ -4050,32 +4067,114 @@ function routineSuggestion(tasks) {
 }
 
 async function startScreenCapture() {
+  if (state.screenStream) {
+    stopScreenCapture("manual");
+    return;
+  }
+
   try {
     const permission = await api("/api/tools/run", {
       method: "POST",
       body: { name: "screen.capture.intent", input: {}, confirmed: true }
     });
     logEvent("screen.capture.intent", permission);
+    const startedAt = Date.now();
+    const durationMs = selectedPerceptionDurationMs();
+    const purpose = screenPerceptionPurpose();
     state.screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    state.screenPerception = createScreenPerception({ now: startedAt, durationMs, purpose });
     els.screenVideo.srcObject = state.screenStream;
     els.screenVideo.hidden = false;
     els.stopScreenButton.hidden = false;
+    els.screenButton.textContent = "Encerrar percepcao";
+    startScreenPerceptionTimer();
+    renderScreenPerceptionStatus();
     updateScreenEvidenceButton();
     renderLocalContextSummary();
-    state.screenStream.getVideoTracks()[0].addEventListener("ended", stopScreenCapture);
+    appendMessage("system", `Percepcao temporaria ativa por ${formatDurationMs(durationMs)}. Finalidade: ${purpose}. Frames crus nao serao persistidos.`);
+    state.screenStream.getVideoTracks()[0].addEventListener("ended", () => stopScreenCapture("browser"));
   } catch (error) {
     appendMessage("system", `Captura nao iniciada: ${error.message}`);
+    stopScreenCapture("failed");
   }
 }
 
-function stopScreenCapture() {
+function stopScreenCapture(reason = "manual") {
+  const ended = finishPerceptionSummary(reason);
   state.screenStream?.getTracks().forEach((track) => track.stop());
   state.screenStream = null;
+  state.screenPerception = null;
+  stopScreenPerceptionTimer();
   els.screenVideo.srcObject = null;
   els.screenVideo.hidden = true;
   els.attachScreenEvidenceButton.hidden = true;
   els.stopScreenButton.hidden = true;
+  els.screenButton.textContent = "Iniciar percepcao";
+  if (ended) {
+    logEvent("screen.perception_ended", ended);
+    if (reason === "expired") {
+      appendMessage("system", "Percepcao encerrada automaticamente por expiracao.");
+    }
+  }
+  renderScreenPerceptionStatus();
   renderLocalContextSummary();
+}
+
+function selectedPerceptionDurationMs() {
+  return normalizePerceptionDurationMs(els.screenDurationSelect?.value);
+}
+
+function screenPerceptionPurpose() {
+  if (state.selectedJob?.id) {
+    return `Acompanhar demanda #${state.selectedJob.id}`;
+  }
+  return "Observacao temporaria consentida do cockpit";
+}
+
+function startScreenPerceptionTimer() {
+  stopScreenPerceptionTimer();
+  state.screenPerceptionTimer = window.setInterval(() => {
+    if (!state.screenPerception) {
+      return;
+    }
+    if (isPerceptionExpired(state.screenPerception)) {
+      stopScreenCapture("expired");
+      return;
+    }
+    renderScreenPerceptionStatus();
+  }, 1000);
+}
+
+function stopScreenPerceptionTimer() {
+  if (state.screenPerceptionTimer) {
+    window.clearInterval(state.screenPerceptionTimer);
+  }
+  state.screenPerceptionTimer = null;
+}
+
+function finishPerceptionSummary(reason) {
+  const summary = finishScreenPerception(state.screenPerception, { reason });
+  if (!summary) {
+    return null;
+  }
+  state.lastPerceptionSummary = summary.text;
+  return summary;
+}
+
+function renderScreenPerceptionStatus() {
+  if (!els.screenPerceptionStatus) {
+    return;
+  }
+  const active = Boolean(state.screenPerception && state.screenStream);
+  els.screenPerceptionStatus.classList.toggle("active", active);
+  els.screenPerceptionStatus.classList.toggle("idle", !active);
+  els.screenPerceptionLabel.textContent = active ? "Percepcao ativa" : "Percepcao desligada";
+  els.screenPerceptionPurpose.textContent = active
+    ? state.screenPerception.purpose
+    : state.lastPerceptionSummary || "Sem observacao ativa.";
+  const remainingMs = active ? remainingPerceptionMs(state.screenPerception) : 0;
+  els.screenPerceptionTimer.textContent = active ? formatCountdown(remainingMs) : "--:--";
+  els.screenPerceptionTimer.setAttribute("datetime", `PT${Math.ceil(remainingMs / 1000)}S`);
 }
 
 async function attachScreenEvidenceToJob() {

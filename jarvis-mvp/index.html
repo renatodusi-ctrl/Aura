@@ -107,12 +107,30 @@
 
             <section>
               <div class="section-row">
-                <h2>Tela</h2>
-              <button id="screen-button" type="button">Capturar</button>
-            </div>
+                <h2>Percepcao</h2>
+                <label class="screen-duration">
+                  <span>Expira</span>
+                  <select id="screen-duration-select" aria-label="Duracao da percepcao de tela">
+                    <option value="60000">1 min</option>
+                    <option value="300000" selected>5 min</option>
+                    <option value="900000">15 min</option>
+                  </select>
+                </label>
+              </div>
+              <div id="screen-perception-status" class="perception-status idle" aria-live="polite">
+                <span class="perception-dot" aria-hidden="true"></span>
+                <div>
+                  <strong id="screen-perception-label">Percepcao desligada</strong>
+                  <small id="screen-perception-purpose">Sem observacao ativa.</small>
+                </div>
+                <time id="screen-perception-timer" datetime="PT0S">--:--</time>
+              </div>
+              <div class="screen-actions">
+                <button id="screen-button" type="button">Iniciar percepcao</button>
+                <button id="attach-screen-evidence-button" class="secondary" type="button" hidden>Anexar a demanda</button>
+                <button id="stop-screen-button" class="secondary" type="button" hidden>Encerrar agora</button>
+              </div>
               <video id="screen-video" autoplay muted playsinline hidden></video>
-              <button id="attach-screen-evidence-button" class="secondary" type="button" hidden>Anexar a demanda</button>
-              <button id="stop-screen-button" class="secondary" type="button" hidden>Parar captura</button>
             </section>
           </aside>
         </details>

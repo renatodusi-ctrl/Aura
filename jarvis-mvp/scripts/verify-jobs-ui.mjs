@@ -12,6 +12,11 @@ for (const id of ["now-hud", "proactive-suggestion", "job-list", "job-detail", "
   assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
 }
 
+for (const id of ["screen-perception-status", "screen-perception-label", "screen-perception-purpose", "screen-perception-timer", "screen-duration-select"]) {
+  assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
+  assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
+}
+
 for (const pattern of [
   /api\("\/api\/jobs\?limit=20"\)/,
   /api\("\/api\/now"\)/,
@@ -36,6 +41,12 @@ for (const token of [
   "Remover evidencia",
   "Evidencia visual",
   "AURA deve considerar esta evidencia visual como contexto consentido.",
+  "screen-perception-status",
+  "screen-duration-select",
+  "Percepcao ativa",
+  "selectedPerceptionDurationMs",
+  "formatCountdown",
+  "screen.perception_ended",
   "renderNowHud",
   "nowHudFact",
   "runNowAction",

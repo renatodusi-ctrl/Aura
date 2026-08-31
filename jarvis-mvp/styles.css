@@ -1181,6 +1181,86 @@ h2 {
   margin: 0 14px 14px;
 }
 
+.screen-duration {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: .82rem;
+}
+
+.screen-duration select {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  background: #10141b;
+}
+
+.perception-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(15, 20, 27, .78);
+}
+
+.perception-status strong,
+.perception-status small {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.perception-status small {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.perception-status time {
+  min-width: 48px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.perception-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.perception-status.active {
+  border-color: rgba(97, 214, 214, .58);
+  background: rgba(37, 92, 96, .18);
+}
+
+.perception-status.active .perception-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 5px rgba(97, 214, 214, .12);
+}
+
+.perception-status.active time {
+  border-color: rgba(97, 214, 214, .5);
+  color: var(--accent);
+}
+
+.screen-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .conversation {
   height: clamp(150px, 22vh, 210px);
   overflow: auto;
