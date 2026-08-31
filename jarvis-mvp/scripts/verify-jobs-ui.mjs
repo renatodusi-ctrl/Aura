@@ -6,7 +6,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
 
-for (const id of ["now-hud", "job-list", "job-detail", "jobs-refresh-button"]) {
+for (const id of ["now-hud", "proactive-suggestion", "job-list", "job-detail", "jobs-refresh-button"]) {
   assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
   assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
 }
@@ -29,6 +29,15 @@ for (const token of [
   "renderNowHud",
   "nowHudFact",
   "runNowAction",
+  "proactive-suggestion",
+  "renderProactiveSuggestion",
+  "buildProactiveSuggestion",
+  "recordProactiveDecision",
+  "Sugestao AURA",
+  "Aceitar",
+  "Adiar",
+  "Recusar",
+  "Silenciar sugestoes",
   "canCancelJob",
   "canConfirmImplementJob",
   "codex/implement",

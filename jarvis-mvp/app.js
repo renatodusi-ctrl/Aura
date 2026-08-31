@@ -5,6 +5,7 @@ import {
   implementationEvidenceFromArtifacts,
   implementationGoalFromPlan
 } from "./councilPlan.js";
+import { buildProactiveSuggestion, recordProactiveDecision } from "./proactive.js";
 
 const state = {
   status: null,
@@ -33,6 +34,9 @@ const state = {
   screenStream: null,
   realtime: null,
   narrationEnabled: localStorage.getItem("aura.narrationEnabled") !== "false",
+  proactivityEnabled: localStorage.getItem("aura.proactivityEnabled") !== "false",
+  proactivityLedger: loadJsonSetting("aura.proactivityLedger", { decisions: {}, history: [] }),
+  proactiveSuggestion: null,
   narrationQueue: [],
   narrationSpeaking: false,
   narrationBootstrapped: false,
@@ -48,6 +52,7 @@ const els = {
   tasksPill: document.querySelector("#tasks-pill"),
   topNextStep: document.querySelector("#top-next-step"),
   nowHud: document.querySelector("#now-hud"),
+  proactiveSuggestion: document.querySelector("#proactive-suggestion"),
   routineToggle: document.querySelector("#routine-toggle"),
   voiceButton: document.querySelector("#voice-button"),
   screenButton: document.querySelector("#screen-button"),
@@ -453,6 +458,7 @@ async function refreshAll() {
   renderStatus();
   renderNarrationToggle();
   renderNowHud();
+  renderProactiveSuggestion();
   enqueueNowNarration();
   renderTopNextStep();
   renderTopView();
@@ -485,6 +491,7 @@ async function refreshJobs() {
   renderCouncil();
   renderLocalContextSummary();
   renderNowHud();
+  renderProactiveSuggestion();
   enqueueNowNarration();
   renderTopNextStep();
   renderCommandBrief();
@@ -597,6 +604,143 @@ function renderNowHud() {
   action.addEventListener("click", () => runNowAction(now, action));
 
   els.nowHud.append(title, facts, action);
+}
+
+function renderProactiveSuggestion() {
+  if (!els.proactiveSuggestion) {
+    return;
+  }
+
+  els.proactiveSuggestion.replaceChildren();
+  if (!state.proactivityEnabled) {
+    els.proactiveSuggestion.hidden = false;
+    const body = proactiveSuggestionBody({
+      label: "Sugestoes pausadas",
+      body: "AURA nao vai iniciar proximas acoes ate voce reativar.",
+      benefit: "Controle total do ritmo do cockpit.",
+      costRisk: "Nenhum custo de API por sugestoes enquanto estiver pausado."
+    });
+    const enable = document.createElement("button");
+    enable.type = "button";
+    enable.textContent = "Ativar sugestoes";
+    enable.addEventListener("click", () => {
+      state.proactivityEnabled = true;
+      localStorage.setItem("aura.proactivityEnabled", "true");
+      renderProactiveSuggestion();
+      logEvent("proactive.enabled", {});
+    });
+    els.proactiveSuggestion.append(body, enable);
+    return;
+  }
+
+  const suggestion = buildProactiveSuggestion({
+    now: state.now,
+    jobs: state.jobs,
+    tasks: state.tasks
+  }, state.proactivityLedger, {
+    enabled: state.proactivityEnabled,
+    activeSignature: state.proactiveSuggestion?.signature
+  });
+
+  state.proactiveSuggestion = suggestion;
+  if (!suggestion) {
+    els.proactiveSuggestion.hidden = true;
+    return;
+  }
+
+  if (state.proactiveSuggestion?.signature !== suggestion.signature) {
+    state.proactivityLedger = recordProactiveDecision(state.proactivityLedger, suggestion, "shown");
+    saveProactivityLedger();
+  }
+
+  els.proactiveSuggestion.hidden = false;
+  const body = proactiveSuggestionBody(suggestion);
+  const actions = document.createElement("div");
+  actions.className = "proactive-actions";
+
+  const accept = document.createElement("button");
+  accept.type = "button";
+  accept.className = "primary";
+  accept.textContent = "Aceitar";
+  accept.addEventListener("click", async () => {
+    recordSuggestionAction(suggestion, "accepted");
+    await runProactiveAction(suggestion, accept);
+  });
+
+  const snooze = document.createElement("button");
+  snooze.type = "button";
+  snooze.textContent = "Adiar";
+  snooze.addEventListener("click", () => {
+    recordSuggestionAction(suggestion, "snoozed");
+    appendMessage("system", "Sugestao adiada. AURA nao vai repetir agora.");
+    renderProactiveSuggestion();
+  });
+
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.textContent = "Recusar";
+  dismiss.addEventListener("click", () => {
+    recordSuggestionAction(suggestion, "dismissed");
+    appendMessage("system", "Sugestao recusada. AURA respeitou e nao vai insistir neste evento.");
+    renderProactiveSuggestion();
+  });
+
+  const mute = document.createElement("button");
+  mute.type = "button";
+  mute.className = "secondary";
+  mute.textContent = "Silenciar sugestoes";
+  mute.addEventListener("click", () => {
+    state.proactivityEnabled = false;
+    localStorage.setItem("aura.proactivityEnabled", "false");
+    logEvent("proactive.muted", {});
+    renderProactiveSuggestion();
+  });
+
+  actions.append(accept, snooze, dismiss, mute);
+  els.proactiveSuggestion.append(body, actions);
+}
+
+function proactiveSuggestionBody(suggestion) {
+  const body = document.createElement("div");
+  body.className = "proactive-body";
+  const label = document.createElement("span");
+  label.textContent = "Sugestao AURA";
+  const title = document.createElement("strong");
+  title.textContent = suggestion.label;
+  const copy = document.createElement("p");
+  copy.textContent = suggestion.body;
+  const meta = document.createElement("dl");
+  appendFact(meta, "Beneficio", suggestion.benefit);
+  appendFact(meta, "Custo/risco", suggestion.costRisk);
+  body.append(label, title, copy, meta);
+  return body;
+}
+
+async function runProactiveAction(suggestion, button) {
+  await withBusyButton(button, "Abrindo", async () => {
+    if (suggestion.action?.jobId) {
+      state.selectedJobId = suggestion.action.jobId;
+      await loadSelectedJob();
+      renderJobs();
+      renderActiveDemand();
+      document.querySelector(".active-demand-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else if (suggestion.action?.kind === "task") {
+      openSessionPanel("tasks");
+    } else {
+      els.localInput?.focus();
+    }
+    renderProactiveSuggestion();
+    logEvent("proactive.accepted", { signature: suggestion.signature, event: suggestion.event });
+  });
+}
+
+function recordSuggestionAction(suggestion, action) {
+  state.proactivityLedger = recordProactiveDecision(state.proactivityLedger, suggestion, action);
+  saveProactivityLedger();
+}
+
+function saveProactivityLedger() {
+  localStorage.setItem("aura.proactivityLedger", JSON.stringify(state.proactivityLedger));
 }
 
 function renderNarrationToggle() {
@@ -4140,6 +4284,15 @@ function logEvent(type, payload) {
     item.innerHTML = `<span>${event.at}</span><code>${event.type}</code>`;
     return item;
   }));
+}
+
+function loadJsonSetting(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function iconButton(text, title) {

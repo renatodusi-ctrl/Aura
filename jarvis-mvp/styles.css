@@ -177,6 +177,73 @@ button.compact {
   font-size: 13px;
 }
 
+.proactive-suggestion {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin: -4px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(242, 184, 75, .34);
+  border-radius: 8px;
+  background: rgba(242, 184, 75, .07);
+}
+
+.proactive-suggestion[hidden] {
+  display: none;
+}
+
+.proactive-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.proactive-body > span {
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.proactive-body > strong,
+.proactive-body > p {
+  overflow-wrap: anywhere;
+}
+
+.proactive-body > p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.proactive-body dl {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 4px 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.proactive-body dt {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.proactive-body dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.proactive-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .brand-lockup {
   display: flex;
   align-items: center;
@@ -2422,6 +2489,15 @@ video {
 
   .now-hud > button {
     width: 100%;
+  }
+
+  .proactive-suggestion,
+  .proactive-body dl {
+    grid-template-columns: 1fr;
+  }
+
+  .proactive-actions {
+    justify-content: flex-start;
   }
 
   .side-panel {
