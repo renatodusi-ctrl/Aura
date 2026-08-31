@@ -167,6 +167,7 @@
           <h2 id="session-heading">Contexto local</h2>
           <div class="session-tabs" role="tablist" aria-label="Contexto local">
             <button type="button" role="tab" data-session-tab="tasks" aria-selected="true">Tarefas</button>
+            <button type="button" role="tab" data-session-tab="github" aria-selected="false">GitHub</button>
             <button type="button" role="tab" data-session-tab="routine" aria-selected="false">Rotina</button>
             <button type="button" role="tab" data-session-tab="memory" aria-selected="false">Memoria</button>
             <button type="button" role="tab" data-session-tab="costs" aria-selected="false">Controle de Custos</button>
@@ -185,6 +186,27 @@
             <button type="submit">Adicionar</button>
           </form>
           <ul id="task-list" class="list"></ul>
+        </div>
+
+        <div class="workspace-tab" data-session-panel="github" role="tabpanel" hidden>
+          <div class="section-row">
+            <div>
+              <h2>GitHub Issues</h2>
+              <p class="panel-copy">Demandas do repositorio conectadas ao fluxo local da AURA.</p>
+            </div>
+            <div class="github-actions">
+              <label>
+                <span>Estado</span>
+                <select id="github-state-select" aria-label="Estado das issues do GitHub">
+                  <option value="open" selected>Abertas</option>
+                  <option value="closed">Fechadas</option>
+                  <option value="all">Todas</option>
+                </select>
+              </label>
+              <button id="github-refresh-button" type="button">Atualizar</button>
+            </div>
+          </div>
+          <div id="github-panel" class="github-panel" aria-live="polite"></div>
         </div>
 
         <div class="workspace-tab" data-session-panel="routine" role="tabpanel" hidden>

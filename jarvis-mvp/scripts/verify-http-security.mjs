@@ -11,6 +11,7 @@ assert.equal(isAllowedOrigin("https://evil.example", config), false);
 
 assert.equal(isProtectedApiPath("/api/context"), true);
 assert.equal(isProtectedApiPath("/api/jobs"), true);
+assert.equal(isProtectedApiPath("/api/github/issues"), true);
 assert.equal(isProtectedApiPath("/api/status"), false);
 assert.equal(isProtectedApiPath("/api/session"), false);
 

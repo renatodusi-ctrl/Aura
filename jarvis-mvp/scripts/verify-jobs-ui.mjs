@@ -29,6 +29,11 @@ for (const id of ["purge-memories-button", "purge-screen-evidence-button"]) {
   assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
 }
 
+for (const id of ["github-refresh-button", "github-state-select", "github-panel"]) {
+  assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
+  assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
+}
+
 for (const pattern of [
   /api\("\/api\/jobs\?limit=20"\)/,
   /api\("\/api\/now"\)/,
@@ -143,7 +148,11 @@ for (const token of [
   "routine.job.created",
   "routineSuggestion",
   "Aprovar",
-  "Descartar"
+  "Descartar",
+  "renderGitHubIssues",
+  "integrationItemForGitHub",
+  "Virar task",
+  "/api/github/issues"
 ]) {
   assert.match(app, new RegExp(token), `Missing jobs UI token: ${token}`);
 }

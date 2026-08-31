@@ -72,6 +72,18 @@ npm run verify
 
 O roteiro fica em `docs/DEMO_JARVIS.md` e cobre voz, HUD, Conselho, implementacao confirmavel, privacidade e re-score.
 
+## GitHub Issues
+
+AURA pode listar issues do GitHub no cockpit em `Contexto local > GitHub` e importar uma issue como task local para seguir o fluxo Codex/Conselho.
+
+Configure o repositorio no `.env`:
+
+```env
+AURA_GITHUB_REPO=renatodusi-ctrl/Aura
+```
+
+Autenticacao: use `gh auth login` no computador local ou configure `GITHUB_TOKEN`/`GH_TOKEN` no `.env`. O token fica apenas no servidor local; o navegador recebe somente metadados das issues.
+
 ## Dados locais
 
 O banco SQLite fica em `data/aura.sqlite`. Essa pasta esta no `.gitignore`.

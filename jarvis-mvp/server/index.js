@@ -51,6 +51,7 @@ import {
 import { synthesizeDebate } from "./debateSynthesizer.js";
 import { handleVoiceIntent } from "./voiceIntents.js";
 import { buildVoiceHealth } from "./voiceHealth.js";
+import { getGitHubIssue, githubStatus, listGitHubIssues } from "./githubAdapter.js";
 import { rememberDecision, rememberJobEvent, rememberPreference, sessionMemorySummary } from "./sessionMemory.js";
 import { redactText } from "./redaction.js";
 import { filteredToolEnv, killProcessTree, prepareToolSpawn, spawnToolSync } from "./processTools.js";
@@ -173,6 +174,23 @@ async function route(req, res) {
 
   if (url.pathname === "/api/codex/activity" && method === "GET") {
     return sendJson(res, 200, await codexActivityPayload());
+  }
+
+  if (url.pathname === "/api/github/status" && method === "GET") {
+    return sendJson(res, 200, { github: githubStatus() });
+  }
+
+  if (url.pathname === "/api/github/issues" && method === "GET") {
+    return githubIssuesRoute(url, res);
+  }
+
+  const githubIssueRoute = matchGitHubIssueRoute(url.pathname);
+  if (githubIssueRoute && method === "GET" && !githubIssueRoute.action) {
+    return githubIssueDetailRoute(githubIssueRoute.number, res);
+  }
+
+  if (githubIssueRoute && method === "POST" && githubIssueRoute.action === "import-task") {
+    return importGitHubIssueTaskRoute(githubIssueRoute.number, res);
   }
 
   if (url.pathname === "/api/jobs" && method === "GET") {
@@ -1198,6 +1216,46 @@ function responseForCommandOutput(output) {
   };
 }
 
+async function githubIssuesRoute(url, res) {
+  try {
+    const payload = await listGitHubIssues({
+      state: url.searchParams.get("state") || "open",
+      limit: limitFromQuery(url, 30)
+    });
+    return sendJson(res, 200, payload);
+  } catch (error) {
+    return sendJson(res, error.statusCode || 500, { error: error.message || "Could not list GitHub issues.", github: githubStatus() });
+  }
+}
+
+async function githubIssueDetailRoute(number, res) {
+  try {
+    return sendJson(res, 200, await getGitHubIssue(number));
+  } catch (error) {
+    return sendJson(res, error.statusCode || 500, { error: error.message || "Could not read GitHub issue.", github: githubStatus() });
+  }
+}
+
+async function importGitHubIssueTaskRoute(number, res) {
+  try {
+    const { issue, status } = await getGitHubIssue(number);
+    const title = `GitHub #${issue.number}: ${issue.title}`;
+    const existing = listTasks(true).find((task) => task.title === title);
+    const task = existing || addTask({
+      title,
+      dueAt: null
+    });
+    return sendJson(res, existing ? 200 : 201, {
+      task,
+      github: status,
+      issue,
+      imported: !existing
+    });
+  } catch (error) {
+    return sendJson(res, error.statusCode || 500, { error: error.message || "Could not import GitHub issue.", github: githubStatus() });
+  }
+}
+
 async function debateSynthesizeRoute(id, req, res) {
   try {
     const body = await readJson(req);
@@ -1314,6 +1372,11 @@ function displayName(name) {
 function matchTaskDevelopRoute(pathname) {
   const match = pathname.match(/^\/api\/tasks\/(\d+)\/develop$/);
   return match ? { id: Number(match[1]) } : null;
+}
+
+function matchGitHubIssueRoute(pathname) {
+  const match = pathname.match(/^\/api\/github\/issues\/(\d+)(?:\/([a-z-]+))?$/);
+  return match ? { number: Number(match[1]), action: match[2] || "" } : null;
 }
 
 function limitFromQuery(url, fallback) {

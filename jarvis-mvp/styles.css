@@ -2236,10 +2236,39 @@ video {
 }
 
 .local-files-panel,
-.codex-activity-panel {
+.codex-activity-panel,
+.github-panel {
   display: grid;
   gap: 12px;
   margin-top: 12px;
+}
+
+.panel-copy {
+  margin: 4px 0 0;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.github-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: end;
+}
+
+.github-actions label {
+  display: grid;
+  gap: 4px;
+  min-width: 130px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.github-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .local-files-header {
@@ -2263,7 +2292,8 @@ video {
 }
 
 .local-files-list,
-.codex-job-list {
+.codex-job-list,
+.github-issue-list {
   display: grid;
   gap: 8px;
   max-height: 320px;
@@ -2274,7 +2304,8 @@ video {
 }
 
 .local-files-list li,
-.codex-job-list li {
+.codex-job-list li,
+.github-issue-list li {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
@@ -2287,29 +2318,52 @@ video {
 }
 
 .local-files-list li.empty,
-.codex-job-list li.empty {
+.codex-job-list li.empty,
+.github-issue-list li.empty {
   display: block;
   color: var(--muted);
 }
 
 .local-files-list div,
-.codex-job-list div {
+.codex-job-list div,
+.github-issue-list div {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
 .local-files-list strong,
-.codex-job-list strong {
+.codex-job-list strong,
+.github-issue-list strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .local-files-list small,
-.codex-job-list small {
+.codex-job-list small,
+.github-issue-list small {
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #18202a;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.button-link:hover {
+  border-color: var(--accent);
 }
 
 .codex-activity-summary {
@@ -2830,6 +2884,7 @@ video {
   .command-brief,
   .local-files-header,
   .codex-activity-summary,
+  .github-summary,
   .cost-hero {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2898,9 +2953,19 @@ video {
   .command-brief,
   .local-files-header,
   .codex-activity-summary,
+  .github-summary,
   .cost-hero,
   .cost-metrics.compact {
     grid-template-columns: 1fr;
+  }
+
+  .github-actions {
+    justify-content: stretch;
+  }
+
+  .github-actions label,
+  .github-actions button {
+    width: 100%;
   }
 
   .status-strip .pill,

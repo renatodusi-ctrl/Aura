@@ -60,6 +60,7 @@ export const config = {
   jobTimeoutMs: intFromEnv("JOB_TIMEOUT_MS", 300000),
   codexTimeoutMs: intFromEnv("CODEX_TIMEOUT_MS", 900000),
   localReadRoots: pathsFromEnv("AURA_LOCAL_READ_ROOTS", [path.resolve(ROOT_DIR, "..")]),
+  githubRepo: process.env.AURA_GITHUB_REPO || "renatodusi-ctrl/Aura",
   databasePath: path.join(DATA_DIR, "aura.sqlite")
 };
 

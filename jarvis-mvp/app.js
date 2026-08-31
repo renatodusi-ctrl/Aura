@@ -23,6 +23,8 @@ const state = {
   tasks: [],
   memories: [],
   costs: null,
+  github: null,
+  githubIssueState: "open",
   localFiles: null,
   codexActivity: null,
   localFileRoot: 0,
@@ -98,6 +100,9 @@ const els = {
   memoryList: document.querySelector("#memory-list"),
   costsRefreshButton: document.querySelector("#costs-refresh-button"),
   costsPanel: document.querySelector("#costs-panel"),
+  githubRefreshButton: document.querySelector("#github-refresh-button"),
+  githubStateSelect: document.querySelector("#github-state-select"),
+  githubPanel: document.querySelector("#github-panel"),
   localFilesRefreshButton: document.querySelector("#local-files-refresh-button"),
   localFilesPanel: document.querySelector("#local-files-panel"),
   codexActivityRefreshButton: document.querySelector("#codex-activity-refresh-button"),
@@ -298,6 +303,11 @@ function bindEvents() {
   els.stopScreenButton.addEventListener("click", stopScreenCapture);
   els.purgeScreenEvidenceButton?.addEventListener("click", purgeScreenEvidence);
   els.costsRefreshButton.addEventListener("click", refreshCosts);
+  els.githubRefreshButton?.addEventListener("click", refreshGitHubIssues);
+  els.githubStateSelect?.addEventListener("change", async () => {
+    state.githubIssueState = els.githubStateSelect.value || "open";
+    await refreshGitHubIssues();
+  });
   els.localFilesRefreshButton?.addEventListener("click", refreshLocalFiles);
   els.codexActivityRefreshButton?.addEventListener("click", refreshCodexActivity);
   els.topCostsRefreshButton.addEventListener("click", refreshCosts);
@@ -323,6 +333,9 @@ function bindEvents() {
     button.addEventListener("click", () => {
       state.sessionTab = button.dataset.sessionTab;
       renderSessionTabs();
+      if (state.sessionTab === "github") {
+        refreshGitHubIssues().catch((error) => logEvent("github.refresh.failed", { error: error.message }));
+      }
     });
   });
   updateComposerValidation();
@@ -466,13 +479,14 @@ function activeJobSummary() {
 }
 
 async function refreshAll() {
-  const [status, nowData, tasksData, memoriesData, jobsData, costsData, localFilesData, codexActivityData] = await Promise.all([
+  const [status, nowData, tasksData, memoriesData, jobsData, costsData, githubData, localFilesData, codexActivityData] = await Promise.all([
     api("/api/status"),
     api("/api/now"),
     api("/api/tasks"),
     api("/api/memories"),
     api("/api/jobs?limit=20"),
     api("/api/costs"),
+    loadGitHubIssues(),
     loadLocalFiles(),
     api("/api/codex/activity")
   ]);
@@ -483,6 +497,7 @@ async function refreshAll() {
   state.memories = memoriesData.memories;
   state.jobs = jobsData.jobs;
   state.costs = costsData;
+  state.github = githubData;
   state.localFiles = localFilesData;
   state.codexActivity = codexActivityData;
   await loadSelectedJob();
@@ -498,6 +513,7 @@ async function refreshAll() {
   renderJobs();
   renderTools();
   renderCosts();
+  renderGitHubIssues();
   renderLocalFiles();
   renderCodexActivity();
   renderCommandBrief();
@@ -537,6 +553,13 @@ async function refreshCosts() {
   renderCommandBrief();
 }
 
+async function refreshGitHubIssues() {
+  state.github = await loadGitHubIssues();
+  renderGitHubIssues();
+  renderIntegrations();
+  renderLocalContextSummary();
+}
+
 async function refreshLocalFiles() {
   state.localFiles = await loadLocalFiles();
   renderLocalFiles();
@@ -551,6 +574,19 @@ function loadLocalFiles() {
   const root = encodeURIComponent(String(state.localFileRoot || 0));
   const relativePath = encodeURIComponent(state.localFilePath || ".");
   return api(`/api/local-files/list?root=${root}&path=${relativePath}`);
+}
+
+async function loadGitHubIssues() {
+  try {
+    return await api(`/api/github/issues?state=${encodeURIComponent(state.githubIssueState)}&limit=30`);
+  } catch (error) {
+    return {
+      status: error.status || 0,
+      github: error.details?.github || null,
+      issues: [],
+      error: error.message
+    };
+  }
 }
 
 async function loadSelectedJob() {
@@ -1107,6 +1143,7 @@ function renderIntegrations() {
     integrationItemForProvider("Gemini", providers.gemini),
     integrationItemForProvider("Grok", providers.grok),
     integrationItemForProvider("OpenRouter", providers.openrouter),
+    integrationItemForGitHub(),
     {
       name: "Workspace",
       role: "Cockpit local",
@@ -1156,6 +1193,20 @@ function renderIntegrations() {
     }
     return row;
   }));
+}
+
+function integrationItemForGitHub() {
+  const github = state.github?.github || state.github?.status || {};
+  const openCount = state.githubIssueState === "open" ? state.github?.issues?.length || 0 : null;
+  return {
+    key: "github",
+    name: "GitHub",
+    role: "Issues",
+    detail: github.configured
+      ? `${github.repo || "repo"}${openCount === null ? "" : ` · ${formatInteger(openCount)} aberta(s)`}`
+      : github.error || "gh auth login ou GITHUB_TOKEN pendente",
+    state: github.configured ? "available" : "unavailable"
+  };
 }
 
 function integrationItemForProvider(name, provider = {}) {
@@ -3504,6 +3555,104 @@ function renderLocalFiles() {
   note.textContent = "Leitura limitada as raizes configuradas em AURA_LOCAL_READ_ROOTS. AURA lista nomes, tipos, tamanhos e datas; nao abre conteudo de arquivo nesta tela.";
 
   els.localFilesPanel.replaceChildren(header, actions, list, note);
+}
+
+function renderGitHubIssues() {
+  if (!els.githubPanel) {
+    return;
+  }
+
+  const data = state.github;
+  if (!data) {
+    els.githubPanel.replaceChildren(emptyParagraph("Issues do GitHub ainda nao carregadas."));
+    return;
+  }
+
+  if (els.githubStateSelect) {
+    els.githubStateSelect.value = state.githubIssueState;
+  }
+
+  const github = data.github || data.status || {};
+  const summary = document.createElement("div");
+  summary.className = "github-summary";
+  summary.append(
+    statusMetric("Repositorio", github.repo || "Nao configurado", github.configured ? `conectado via ${github.source}` : "configure AURA_GITHUB_REPO"),
+    statusMetric("Issues", formatInteger(data.issues?.length || 0), labelForGitHubIssueState(state.githubIssueState)),
+    statusMetric("Acesso", github.configured ? "pronto" : "pendente", github.error || "gh CLI ou token local")
+  );
+
+  const list = document.createElement("ul");
+  list.className = "github-issue-list";
+  if (data.error) {
+    list.append(emptyListItem(`GitHub indisponivel: ${data.error}`));
+  } else if (!data.issues?.length) {
+    list.append(emptyListItem("Nenhuma issue encontrada para este filtro."));
+  } else {
+    for (const issue of data.issues) {
+      list.append(renderGitHubIssue(issue));
+    }
+  }
+
+  const note = document.createElement("p");
+  note.className = "permission-note";
+  note.textContent = "AURA le issues via servidor local usando gh CLI ou GITHUB_TOKEN. Credenciais nao sao enviadas ao navegador.";
+
+  els.githubPanel.replaceChildren(summary, list, note);
+}
+
+function renderGitHubIssue(issue) {
+  const item = document.createElement("li");
+  item.className = `github-issue ${issue.state || "open"}`;
+
+  const main = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = `#${issue.number} · ${issue.title}`;
+  const meta = document.createElement("small");
+  const labels = (issue.labels || []).map((label) => label.name).filter(Boolean).slice(0, 4).join(", ");
+  meta.textContent = [
+    issue.state === "closed" ? "fechada" : "aberta",
+    labels,
+    issue.updatedAt ? `atualizada ${formatDateTime(issue.updatedAt)}` : ""
+  ].filter(Boolean).join(" · ");
+  main.append(title, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+
+  const task = document.createElement("button");
+  task.type = "button";
+  task.textContent = "Virar task";
+  task.addEventListener("click", async () => {
+    await withBusyButton(task, "Importando", async () => {
+      const result = await api(`/api/github/issues/${issue.number}/import-task`, { method: "POST" });
+      appendMessage("system", result.imported
+        ? `Issue #${issue.number} importada como task local.`
+        : `Issue #${issue.number} ja existia como task local.`);
+      await refreshAll();
+      state.sessionTab = "tasks";
+      renderSessionTabs();
+    });
+  });
+
+  const open = document.createElement("a");
+  open.className = "button-link";
+  open.href = issue.url;
+  open.target = "_blank";
+  open.rel = "noreferrer";
+  open.textContent = "Abrir";
+
+  actions.append(task, open);
+  item.append(main, actions);
+  return item;
+}
+
+function labelForGitHubIssueState(value) {
+  const labels = {
+    open: "abertas",
+    closed: "fechadas",
+    all: "todas"
+  };
+  return labels[value] || "issues";
 }
 
 function renderCodexActivity() {
