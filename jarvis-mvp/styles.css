@@ -73,6 +73,20 @@ button.secondary {
   gap: 16px;
 }
 
+.voice-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+button.compact {
+  min-height: 34px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
 .topbar {
   margin-bottom: 20px;
   min-height: 74px;

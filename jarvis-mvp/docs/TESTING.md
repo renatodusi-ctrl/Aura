@@ -22,6 +22,8 @@ This checks JavaScript syntax with Node.
 10. Add either `OPENAI_API_KEY` with `VOICE_PROVIDER=openai` or `GEMINI_API_KEY` with `VOICE_PROVIDER=gemini` to `.env`.
 11. Restart the server, click `Conectar voz`, allow microphone access in Chrome or Edge, say `Aura`, ask a short question, then say `ate logo Aura`.
 12. Confirm the assistant speaks, returns to standby, and falls back to text with a clear reason if the provider rejects the session.
+13. Keep `Silenciar narracao` active, move a demand to concluded, failed and cancelled states, and confirm AURA narrates at most two short sentences from the same next step shown in `Agora`.
+14. Click `Silenciar narracao`, repeat a state change, and confirm no spoken narration is queued while the cockpit stays available.
 
 ## Future Automation
 

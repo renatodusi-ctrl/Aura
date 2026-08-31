@@ -53,7 +53,10 @@
                 <h2>Comando AURA</h2>
                 <p>Fale ou escreva o objetivo. Se usar voz, diga “Aura” para me chamar.</p>
               </div>
-              <button id="voice-button" class="primary" type="button" data-connected="false">Conectar voz</button>
+              <div class="voice-actions">
+                <button id="narration-toggle" class="secondary compact" type="button" aria-pressed="true">Silenciar narracao</button>
+                <button id="voice-button" class="primary" type="button" data-connected="false">Conectar voz</button>
+              </div>
             </div>
 
             <div id="command-brief" class="command-brief" aria-live="polite"></div>

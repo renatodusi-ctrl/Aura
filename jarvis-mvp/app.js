@@ -1,4 +1,5 @@
 import { RealtimeClient } from "./realtime.js";
+import { buildSpeakableNow, shouldNarrateNow } from "./nowNarration.js";
 
 const state = {
   status: null,
@@ -26,6 +27,12 @@ const state = {
   routineEnabled: localStorage.getItem("aura.routineEnabled") === "true",
   screenStream: null,
   realtime: null,
+  narrationEnabled: localStorage.getItem("aura.narrationEnabled") !== "false",
+  narrationQueue: [],
+  narrationSpeaking: false,
+  narrationBootstrapped: false,
+  lastNarrationId: "",
+  spokenNarrationIds: new Set(),
   recordedRealtimeUsage: new Set(),
   sessionToken: ""
 };
@@ -44,6 +51,7 @@ const els = {
   localInput: document.querySelector("#local-input"),
   localSubmitButton: document.querySelector("#local-submit-button"),
   voicePanel: document.querySelector(".voice-panel"),
+  narrationToggle: document.querySelector("#narration-toggle"),
   commandBrief: document.querySelector("#command-brief"),
   attachmentInput: document.querySelector("#attachment-input"),
   attachmentTray: document.querySelector("#attachment-tray"),
@@ -146,6 +154,19 @@ function bindEvents() {
       });
       appendMessage("system", `Nao consegui abrir a voz ao vivo porque ${humanizeVoiceError(error)}. Podemos continuar por texto local.`);
       setVoiceStatus("fallback");
+    }
+  });
+
+  els.narrationToggle?.addEventListener("click", () => {
+    state.narrationEnabled = !state.narrationEnabled;
+    localStorage.setItem("aura.narrationEnabled", String(state.narrationEnabled));
+    renderNarrationToggle();
+    if (state.narrationEnabled) {
+      drainNarrationQueue();
+    } else if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      state.narrationQueue = [];
+      state.narrationSpeaking = false;
     }
   });
 
@@ -425,7 +446,9 @@ async function refreshAll() {
   state.codexActivity = codexActivityData;
   await loadSelectedJob();
   renderStatus();
+  renderNarrationToggle();
   renderNowHud();
+  enqueueNowNarration();
   renderTopNextStep();
   renderTopView();
   renderTasks();
@@ -457,6 +480,7 @@ async function refreshJobs() {
   renderCouncil();
   renderLocalContextSummary();
   renderNowHud();
+  enqueueNowNarration();
   renderTopNextStep();
   renderCommandBrief();
   renderCodexActivity();
@@ -568,6 +592,81 @@ function renderNowHud() {
   action.addEventListener("click", () => runNowAction(now, action));
 
   els.nowHud.append(title, facts, action);
+}
+
+function renderNarrationToggle() {
+  if (!els.narrationToggle) {
+    return;
+  }
+  els.narrationToggle.textContent = state.narrationEnabled ? "Silenciar narracao" : "Ativar narracao";
+  els.narrationToggle.setAttribute("aria-pressed", String(state.narrationEnabled));
+  els.narrationToggle.title = state.narrationEnabled
+    ? "Pausar narracoes curtas do estado Agora sem desligar o cockpit."
+    : "Reativar narracoes curtas do estado Agora.";
+}
+
+function enqueueNowNarration() {
+  const item = buildSpeakableNow(state.now);
+  if (!item) {
+    state.narrationBootstrapped = true;
+    return;
+  }
+
+  if (!state.narrationBootstrapped) {
+    state.narrationBootstrapped = true;
+    state.lastNarrationId = item.id;
+    return;
+  }
+
+  if (!shouldNarrateNow(item, {
+    lastId: state.lastNarrationId,
+    spokenIds: state.spokenNarrationIds
+  })) {
+    return;
+  }
+
+  state.lastNarrationId = item.id;
+  if (!state.narrationEnabled) {
+    return;
+  }
+
+  state.spokenNarrationIds.add(item.id);
+  state.narrationQueue.push(item);
+  drainNarrationQueue();
+}
+
+function drainNarrationQueue() {
+  if (state.narrationSpeaking || !state.narrationEnabled) {
+    return;
+  }
+  const next = state.narrationQueue.shift();
+  if (!next) {
+    return;
+  }
+  speakNarration(next.text).finally(() => {
+    state.narrationSpeaking = false;
+    drainNarrationQueue();
+  });
+}
+
+function speakNarration(text) {
+  state.narrationSpeaking = true;
+  logEvent("voice.narration.queued", { text });
+  if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+    appendMessage("system", `Narracao: ${text}`);
+    return Promise.resolve();
+  }
+
+  window.speechSynthesis.cancel();
+  return new Promise((resolve) => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "pt-BR";
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.onend = resolve;
+    utterance.onerror = resolve;
+    window.speechSynthesis.speak(utterance);
+  });
 }
 
 function nowHudFact(label, value) {
