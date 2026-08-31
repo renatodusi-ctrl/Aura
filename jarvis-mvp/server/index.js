@@ -12,6 +12,8 @@ import {
   listMemories,
   addMemory,
   updateMemory,
+  deleteAllMemories,
+  deleteMemoriesByIds,
   persistentMemorySummary,
   listTasks,
   addTask,
@@ -21,6 +23,7 @@ import {
   createJob,
   createJobArtifact,
   deleteJobArtifact,
+  deleteJobArtifactsByKind,
   getJob,
   listJobArtifacts,
   listJobEvents,
@@ -257,6 +260,10 @@ async function route(req, res) {
   const artifactRoute = matchJobArtifactRoute(url.pathname);
   if (artifactRoute && method === "DELETE") {
     return removeScreenEvidenceRoute(artifactRoute.jobId, artifactRoute.artifactId, url, res);
+  }
+
+  if (url.pathname === "/api/privacy/purge" && method === "POST") {
+    return purgePrivacyDataRoute(req, res);
   }
 
   if (url.pathname === "/api/memories" && method === "GET") {
@@ -1022,6 +1029,29 @@ function removeScreenEvidenceRoute(jobId, artifactId, url, res) {
     return sendJson(res, 200, { ...removed, events: listJobEvents(jobId), artifacts: listJobArtifacts(jobId) });
   } catch (error) {
     return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not remove screen evidence."));
+  }
+}
+
+async function purgePrivacyDataRoute(req, res) {
+  try {
+    const body = await readJson(req);
+    if (body.confirmed !== true) {
+      throw httpError(400, "Privacy purge requires explicit confirmation.");
+    }
+    const scope = String(body.scope || "").trim();
+    if (scope === "memories") {
+      const ids = Array.isArray(body.ids) ? body.ids : [];
+      const result = ids.length ? deleteMemoriesByIds(ids) : deleteAllMemories();
+      return sendJson(res, 200, { scope, ...result, persistentMemory: persistentMemorySummary() });
+    }
+    if (scope === "screen-evidence") {
+      const ids = Array.isArray(body.ids) ? body.ids : [];
+      const result = deleteJobArtifactsByKind("screen-evidence", { ids });
+      return sendJson(res, 200, { scope, ...result });
+    }
+    throw httpError(400, "Unsupported privacy purge scope.");
+  } catch (error) {
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not purge privacy data."));
   }
 }
 

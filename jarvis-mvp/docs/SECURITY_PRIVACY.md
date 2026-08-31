@@ -24,6 +24,12 @@ Unexpected browser origins are rejected before sensitive endpoints run. The allo
 ## Redaction
 
 Job goals, job event messages, job event data, job metadata and tool run input/output are redacted before persistence. The baseline redactor masks token-like values, sensitive keys and `.env` paths.
+The cockpit also redacts visible local messages, streaming transcripts and technical event payloads before rendering them in the browser, including attachment data URLs.
+
+## Data Deletion
+
+The user can delete individual memories, remove individual visual evidence artifacts, or use privacy purge controls to delete persisted memories and persisted `screen-evidence` summaries after explicit confirmation.
+The purge API is protected by the local session token and accepts a constrained scope: `memories` or `screen-evidence`.
 
 ## Screen Capture
 

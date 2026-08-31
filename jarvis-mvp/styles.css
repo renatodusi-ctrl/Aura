@@ -1324,6 +1324,11 @@ h2 {
   margin-top: 10px;
 }
 
+.screen-actions .secondary {
+  width: auto;
+  margin-top: 0;
+}
+
 .conversation {
   height: clamp(150px, 22vh, 210px);
   overflow: auto;

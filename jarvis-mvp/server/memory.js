@@ -231,6 +231,30 @@ export function deleteMemory(id) {
   return { deleted: result.changes > 0 };
 }
 
+export function deleteAllMemories() {
+  const result = db.prepare("DELETE FROM memories").run();
+  return { deleted: result.changes };
+}
+
+export function deleteMemoriesByIds(ids) {
+  const normalizedIds = ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0);
+  if (!normalizedIds.length) {
+    return { deleted: 0 };
+  }
+  db.exec("BEGIN");
+  try {
+    let deleted = 0;
+    for (const id of normalizedIds) {
+      deleted += db.prepare("DELETE FROM memories WHERE id = ?").run(id).changes;
+    }
+    db.exec("COMMIT");
+    return { deleted };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 export function persistentMemorySummary(limit = 12) {
   const memories = listMemories(limit)
     .map((memory) => ({
@@ -817,6 +841,38 @@ export function deleteJobArtifact(jobId, artifactId, { allowedKinds = [] } = {})
     label: artifact.label
   });
   return { deleted: result.changes > 0, artifact: formatJobArtifact({ ...artifact, metadata: "{}", content: "", createdAt: null }) };
+}
+
+export function deleteJobArtifactsByKind(kind, { ids = [] } = {}) {
+  const normalizedKind = String(kind || "").trim();
+  const allArtifacts = db.prepare(`
+    SELECT id, job_id AS jobId, kind, label
+    FROM job_artifacts
+    WHERE kind = ?
+  `).all(normalizedKind);
+  const idSet = new Set(ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0));
+  const artifacts = idSet.size
+    ? allArtifacts.filter((artifact) => idSet.has(artifact.id))
+    : allArtifacts;
+
+  db.exec("BEGIN");
+  try {
+    for (const artifact of artifacts) {
+      db.prepare("DELETE FROM job_artifacts WHERE id = ?").run(artifact.id);
+      insertJobEvent(artifact.jobId, "job.artifact_removed", `Artifact removed: ${artifact.label}.`, {
+        artifactId: artifact.id,
+        kind: artifact.kind,
+        label: artifact.label,
+        purge: true
+      });
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { deleted: artifacts.length };
 }
 
 export function listJobArtifacts(jobId) {

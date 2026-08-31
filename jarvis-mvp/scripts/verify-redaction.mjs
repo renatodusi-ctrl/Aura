@@ -16,5 +16,7 @@ assert.equal(redacted.apiKey, "[REDACTED]");
 assert.equal(redacted.nested.path, "[REDACTED_ENV_PATH]");
 assert.equal(redacted.nested.text, "GITHUB_TOKEN=[REDACTED]");
 assert.equal(redactText("job event has sk-abcdefghijklmnop"), "job event has [REDACTED_OPENAI_KEY]");
+assert.equal(redactText("inline data:image/png;base64,abc123=="), "inline [REDACTED_ATTACHMENT_DATA]");
+assert.equal(redactObject({ imageDataUrl: "data:image/png;base64,abc123==" }).imageDataUrl, "[REDACTED]");
 
 console.log("Redaction verification passed.");

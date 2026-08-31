@@ -24,6 +24,11 @@ for (const id of ["voice-metrics"]) {
   assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
 }
 
+for (const id of ["purge-memories-button", "purge-screen-evidence-button"]) {
+  assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
+  assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
+}
+
 for (const pattern of [
   /api\("\/api\/jobs\?limit=20"\)/,
   /api\("\/api\/now"\)/,
@@ -60,6 +65,10 @@ for (const token of [
   "mission-decision-card",
   "runMissionDecisionAction",
   "Decisao agora",
+  "purgeMemories",
+  "purgeScreenEvidence",
+  "redactClientText",
+  "/api/privacy/purge",
   "renderNowHud",
   "nowHudFact",
   "runNowAction",

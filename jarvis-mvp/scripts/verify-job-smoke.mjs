@@ -124,6 +124,33 @@ try {
   assert.equal(deletedPreference.status, 200);
   assert.equal(deletedPreference.data.output.deleted, true);
 
+  const purgeMemoryFixture = await request("/api/memories", {
+    method: "POST",
+    headers,
+    body: {
+      kind: "note",
+      content: "memoria temporaria para purga OPENAI_API_KEY=sk-proj-purge-secret"
+    }
+  });
+  assert.equal(purgeMemoryFixture.status, 201);
+  assert.doesNotMatch(purgeMemoryFixture.data.memory.content, /sk-proj-purge-secret/);
+
+  const purgeMemoryDenied = await request("/api/privacy/purge", {
+    method: "POST",
+    headers,
+    body: { scope: "memories", confirmed: false }
+  });
+  assert.equal(purgeMemoryDenied.status, 400);
+
+  const purgeMemory = await request("/api/privacy/purge", {
+    method: "POST",
+    headers,
+    body: { scope: "memories", ids: [purgeMemoryFixture.data.memory.id], confirmed: true }
+  });
+  assert.equal(purgeMemory.status, 200);
+  assert.ok(purgeMemory.data.deleted >= 1);
+  assert.ok(!purgeMemory.data.persistentMemory.notes.some((memory) => memory.id === purgeMemoryFixture.data.memory.id));
+
   const listed = await request("/api/jobs?limit=5", { headers });
   assert.equal(listed.status, 200);
   assert.ok(listed.data.jobs.some((job) => job.id === created.data.job.id));
@@ -165,6 +192,34 @@ try {
   assert.equal(screenEvidenceRemoved.data.deleted, true);
   assert.ok(screenEvidenceRemoved.data.events.some((event) => event.type === "screen.evidence_removed"));
   assert.ok(!screenEvidenceRemoved.data.artifacts.some((artifact) => artifact.id === screenEvidence.data.artifact.id));
+
+  const purgeScreenEvidenceFixture = await request(`/api/jobs/${created.data.job.id}/screen-evidence`, {
+    method: "POST",
+    headers,
+    body: {
+      confirmed: true,
+      width: 800,
+      height: 450,
+      summary: "Evidencia temporaria para purga com GITHUB_TOKEN=ghp_abcdefghijklmnop"
+    }
+  });
+  assert.equal(purgeScreenEvidenceFixture.status, 201);
+  assert.doesNotMatch(purgeScreenEvidenceFixture.data.artifact.content, /ghp_abcdefghijklmnop/);
+
+  const purgeScreenEvidenceDenied = await request("/api/privacy/purge", {
+    method: "POST",
+    headers,
+    body: { scope: "screen-evidence", confirmed: false }
+  });
+  assert.equal(purgeScreenEvidenceDenied.status, 400);
+
+  const purgeScreenEvidence = await request("/api/privacy/purge", {
+    method: "POST",
+    headers,
+    body: { scope: "screen-evidence", ids: [purgeScreenEvidenceFixture.data.artifact.id], confirmed: true }
+  });
+  assert.equal(purgeScreenEvidence.status, 200);
+  assert.ok(purgeScreenEvidence.data.deleted >= 1);
 
   const governed = await request("/api/jobs", {
     method: "POST",

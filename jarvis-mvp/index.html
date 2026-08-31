@@ -130,6 +130,7 @@
                 <button id="screen-button" type="button">Iniciar percepcao</button>
                 <button id="attach-screen-evidence-button" class="secondary" type="button" hidden>Anexar a demanda</button>
                 <button id="stop-screen-button" class="secondary" type="button" hidden>Encerrar agora</button>
+                <button id="purge-screen-evidence-button" class="danger-button" type="button">Apagar evidencias</button>
               </div>
               <video id="screen-video" autoplay muted playsinline hidden></video>
             </section>
@@ -198,7 +199,10 @@
         </div>
 
         <div class="workspace-tab" data-session-panel="memory" role="tabpanel" hidden>
-          <h2>Memoria</h2>
+          <div class="section-row">
+            <h2>Memoria</h2>
+            <button id="purge-memories-button" class="danger-button" type="button">Apagar memorias</button>
+          </div>
           <form id="memory-form" class="inline-form">
             <input id="memory-input" type="text" placeholder="Guardar memoria local">
             <button type="submit">Guardar</button>

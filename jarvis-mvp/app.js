@@ -15,6 +15,7 @@ import {
   normalizePerceptionDurationMs,
   remainingPerceptionMs
 } from "./screenPerception.js";
+import { redactClientObject, redactClientText } from "./clientPrivacy.js";
 
 const state = {
   status: null,
@@ -72,6 +73,7 @@ const els = {
   attachScreenEvidenceButton: document.querySelector("#attach-screen-evidence-button"),
   stopScreenButton: document.querySelector("#stop-screen-button"),
   screenDurationSelect: document.querySelector("#screen-duration-select"),
+  purgeScreenEvidenceButton: document.querySelector("#purge-screen-evidence-button"),
   screenPerceptionStatus: document.querySelector("#screen-perception-status"),
   screenPerceptionLabel: document.querySelector("#screen-perception-label"),
   screenPerceptionPurpose: document.querySelector("#screen-perception-purpose"),
@@ -92,6 +94,7 @@ const els = {
   taskList: document.querySelector("#task-list"),
   memoryForm: document.querySelector("#memory-form"),
   memoryInput: document.querySelector("#memory-input"),
+  purgeMemoriesButton: document.querySelector("#purge-memories-button"),
   memoryList: document.querySelector("#memory-list"),
   costsRefreshButton: document.querySelector("#costs-refresh-button"),
   costsPanel: document.querySelector("#costs-panel"),
@@ -288,10 +291,12 @@ function bindEvents() {
     });
     updateSubmitButton(els.memoryForm, false);
   });
+  els.purgeMemoriesButton?.addEventListener("click", purgeMemories);
 
   els.screenButton.addEventListener("click", startScreenCapture);
   els.attachScreenEvidenceButton.addEventListener("click", attachScreenEvidenceToJob);
   els.stopScreenButton.addEventListener("click", stopScreenCapture);
+  els.purgeScreenEvidenceButton?.addEventListener("click", purgeScreenEvidence);
   els.costsRefreshButton.addEventListener("click", refreshCosts);
   els.localFilesRefreshButton?.addEventListener("click", refreshLocalFiles);
   els.codexActivityRefreshButton?.addEventListener("click", refreshCodexActivity);
@@ -1461,6 +1466,35 @@ function renderMemories() {
     item.append(content, editButton, deleteButton);
     return item;
   }));
+}
+
+async function purgeMemories() {
+  if (!confirm("Apagar todas as memorias persistentes da AURA? Esta acao nao remove tarefas nem historico de demandas.")) {
+    return;
+  }
+  await withBusyButton(els.purgeMemoriesButton, "Apagando", async () => {
+    const result = await api("/api/privacy/purge", {
+      method: "POST",
+      body: { scope: "memories", confirmed: true }
+    });
+    state.memories = [];
+    appendMessage("system", `${formatInteger(result.deleted || 0)} memoria(s) persistente(s) apagada(s).`);
+    await refreshAll();
+  });
+}
+
+async function purgeScreenEvidence() {
+  if (!confirm("Apagar todas as evidencias visuais persistidas? Frames crus nao sao armazenados; apenas resumos anexados serao removidos.")) {
+    return;
+  }
+  await withBusyButton(els.purgeScreenEvidenceButton, "Apagando", async () => {
+    const result = await api("/api/privacy/purge", {
+      method: "POST",
+      body: { scope: "screen-evidence", confirmed: true }
+    });
+    appendMessage("system", `${formatInteger(result.deleted || 0)} evidencia(s) visual(is) apagada(s).`);
+    await refreshAll();
+  });
 }
 
 function labelForMemoryKind(kind) {
@@ -4721,7 +4755,8 @@ function appendAssistantDelta(delta) {
     last = appendMessage("assistant", "");
     last.dataset.streaming = "true";
   }
-  last.querySelector("p").textContent += delta;
+  const body = last.querySelector("p");
+  body.textContent = redactClientText(`${body.textContent}${delta}`);
 }
 
 function appendMessage(role, text, attachments = []) {
@@ -4738,7 +4773,7 @@ function appendMessage(role, text, attachments = []) {
   const label = document.createElement("strong");
   label.textContent = labelForRole(role);
   const body = document.createElement("p");
-  body.textContent = text;
+  body.textContent = redactClientText(text);
   content.append(label, body);
   item.append(avatar, content);
   if (attachments.length) {
@@ -4785,7 +4820,7 @@ function renderMessageAttachments(attachments) {
       card.append(audio);
     }
     const caption = document.createElement("figcaption");
-    caption.textContent = `${attachment.kind}: ${attachment.name}`;
+    caption.textContent = redactClientText(`${attachment.kind}: ${attachment.name}`);
     card.append(caption);
     list.append(card);
   }
@@ -4793,7 +4828,11 @@ function renderMessageAttachments(attachments) {
 }
 
 function logEvent(type, payload) {
-  state.events.unshift({ type, payload, at: new Date().toLocaleTimeString() });
+  state.events.unshift({
+    type: redactClientText(type),
+    payload: redactClientObject(payload),
+    at: new Date().toLocaleTimeString()
+  });
   state.events = state.events.slice(0, 20);
   els.eventLog.replaceChildren(...state.events.map((event) => {
     const item = document.createElement("li");
