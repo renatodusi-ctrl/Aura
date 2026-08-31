@@ -508,12 +508,15 @@ function renderStatus() {
   els.privacyPill.textContent = "Local privado";
   els.privacyPill.title = "Servidor local em 127.0.0.1; chave OpenAI fica no servidor.";
 
-  const voiceProvider = state.status.realtimeProvider === "gemini" ? "Gemini Live" : "OpenAI";
-  els.realtimePill.textContent = state.status.realtimeEnabled ? `Voz: ${voiceProvider}` : "Voz local";
+  const voiceHealth = state.status.voice || {};
+  const voiceProvider = voiceHealth.providerLabel || (state.status.realtimeProvider === "gemini" ? "Gemini Live" : "OpenAI");
+  els.realtimePill.textContent = state.status.realtimeEnabled
+    ? `Voz: ${voiceProvider}`
+    : (voiceHealth.status === "configuration_error" ? "Voz: revisar config" : "Voz local");
   els.realtimePill.className = `pill ${state.status.realtimeEnabled ? "ok" : "warn"}`;
   els.realtimePill.title = state.status.realtimeEnabled
-    ? `${voiceProvider} · ${state.status.realtimeModel} · voz ${state.status.realtimeVoice}.`
-    : "Voz ao vivo indisponivel; AURA opera com fallback local.";
+    ? `${voiceProvider} · ${state.status.realtimeModel} · voz ${state.status.realtimeVoice}. Health ${voiceHealth.latencyMs ?? 0}ms.`
+    : (voiceHealth.fallbackReason || "Voz ao vivo indisponivel; AURA opera com fallback local.");
 
   els.tasksPill.textContent = `${state.status.memory.openTasks} tarefas abertas`;
   els.tasksPill.className = "pill";
@@ -658,7 +661,7 @@ function renderCommandBrief() {
     return;
   }
 
-  const voiceProvider = state.status?.realtimeProvider === "gemini" ? "Gemini Live" : "OpenAI";
+  const voiceProvider = state.status?.voice?.providerLabel || (state.status?.realtimeProvider === "gemini" ? "Gemini Live" : "OpenAI");
   const voiceState = state.status?.realtimeEnabled ? voiceProvider : "Texto local";
   const selected = state.selectedJob;
   const cost = state.costs?.totals?.estimatedCostUsd || 0;
@@ -670,7 +673,7 @@ function renderCommandBrief() {
   };
   const items = [
     ["Modo", intentLabels[state.composerIntent] || "Conversar", modeHintForComposer()],
-    ["Voz", voiceState, state.status?.realtimeEnabled ? "standby por wake word" : "fallback local"],
+    ["Voz", voiceState, state.status?.realtimeEnabled ? "standby por wake word" : (state.status?.voice?.fallbackReason || "fallback local")],
     ["Custo", formatUsd(cost), `${formatInteger(tokens)} tokens`],
     ["Demanda", selected ? `#${selected.id}` : "Nenhuma", selected ? nextStepForJob(selected) : "pronta para uma nova missao"]
   ];
@@ -3494,8 +3497,11 @@ function humanizeVoiceError(error) {
   if (message.includes("openai_api_key")) {
     return "a chave de voz ao vivo nao esta configurada";
   }
-  if (message.includes("gemini api key") || message.includes("gemini live websocket")) {
+  if (message.includes("gemini_api_key") || message.includes("gemini api key") || message.includes("gemini live websocket")) {
     return "a conexao com o Gemini Live nao foi aberta";
+  }
+  if (message.includes("voice_provider")) {
+    return "o provider de voz configurado nao e suportado; use openai ou gemini";
   }
   if (message.includes("audio context")) {
     return "este navegador nao permite inicializar audio em tempo real";

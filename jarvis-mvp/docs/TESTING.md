@@ -17,7 +17,11 @@ This checks JavaScript syntax with Node.
 5. Send `bom dia` in the text composer.
 6. Toggle routine on.
 7. Try screen capture and stop it.
-8. Add `OPENAI_API_KEY` to `.env`, restart, and test voice.
+8. Open `/api/status` and confirm `voice.status` is `fallback`, `realtime`, or `configuration_error`; no API key may appear in the response.
+9. Open `/api/voice/health` and confirm provider, model, voice, latency and fallback reason are visible.
+10. Add either `OPENAI_API_KEY` with `VOICE_PROVIDER=openai` or `GEMINI_API_KEY` with `VOICE_PROVIDER=gemini` to `.env`.
+11. Restart the server, click `Conectar voz`, allow microphone access in Chrome or Edge, say `Aura`, ask a short question, then say `ate logo Aura`.
+12. Confirm the assistant speaks, returns to standby, and falls back to text with a clear reason if the provider rejects the session.
 
 ## Future Automation
 

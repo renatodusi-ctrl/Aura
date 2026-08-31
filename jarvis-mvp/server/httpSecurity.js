@@ -26,7 +26,7 @@ export function isProtectedApiPath(pathname) {
     return false;
   }
 
-  return !["/api/session", "/api/status", "/api/realtime/config"].includes(pathname);
+  return !["/api/session", "/api/status", "/api/voice/health", "/api/realtime/config"].includes(pathname);
 }
 
 export function validateSessionRequest({ origin, token, expectedToken, host, port }) {

@@ -34,6 +34,7 @@ import { detectCodex, runCodexAsk, runCodexImplement } from "./codexAdapter.js";
 import { analystCircuitState, buildEvidenceBrief, cancelAnalystJobProcess, runAnalysts } from "./analystAdapter.js";
 import { synthesizeDebate } from "./debateSynthesizer.js";
 import { handleVoiceIntent } from "./voiceIntents.js";
+import { buildVoiceHealth } from "./voiceHealth.js";
 import { redactText } from "./redaction.js";
 import { filteredToolEnv, killProcessTree, prepareToolSpawn, spawnToolSync } from "./processTools.js";
 import { codexActivityPayload, listLocalFolder, localRootsPayload } from "./localAccess.js";
@@ -68,8 +69,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(config.port, config.host, () => {
+  const currentVoiceStatus = voiceStatus();
   console.log(`AURA cockpit ready at http://${config.host}:${config.port}`);
-  console.log(voiceStatus().enabled ? `Realtime voice: ${voiceStatus().provider}` : "Realtime voice: local fallback (voice provider not configured)");
+  console.log(currentVoiceStatus.enabled ? `Realtime voice: ${currentVoiceStatus.provider}` : `Realtime voice: ${currentVoiceStatus.status} (${currentVoiceStatus.fallbackReason})`);
 });
 
 server.on("upgrade", (req, socket) => {
@@ -99,13 +101,15 @@ async function route(req, res) {
 
   if (url.pathname === "/api/status" && method === "GET") {
     const providers = await getProviderPreflight();
-    const currentVoiceStatus = voiceStatus();
+    const voiceHealthStartedAtMs = Date.now();
+    const currentVoiceStatus = voiceStatus(voiceHealthStartedAtMs);
     return sendJson(res, 200, {
       ok: true,
       realtimeEnabled: currentVoiceStatus.enabled,
       realtimeProvider: currentVoiceStatus.provider,
       realtimeModel: currentVoiceStatus.model,
       realtimeVoice: currentVoiceStatus.voice,
+      voice: currentVoiceStatus,
       dailyRoutineHour: config.dailyRoutineHour,
       jobHistoryRetentionDays: config.jobHistoryRetentionDays,
       jobExportDir: config.jobExportDir,
@@ -121,6 +125,10 @@ async function route(req, res) {
 
   if (url.pathname === "/api/now" && method === "GET") {
     return sendJson(res, 200, { now: buildNowSnapshot() });
+  }
+
+  if (url.pathname === "/api/voice/health" && method === "GET") {
+    return sendJson(res, 200, { voice: voiceStatus(Date.now()) });
   }
 
   if (url.pathname === "/api/local-files" && method === "GET") {
@@ -286,22 +294,8 @@ function validateApiProtection(req) {
   });
 }
 
-function voiceStatus() {
-  if (config.voiceProvider === "gemini") {
-    return {
-      provider: "gemini",
-      enabled: Boolean(config.geminiApiKey),
-      model: config.geminiLiveModel,
-      voice: config.geminiLiveVoice
-    };
-  }
-
-  return {
-    provider: "openai",
-    enabled: Boolean(config.openaiApiKey),
-    model: config.realtimeModel,
-    voice: config.realtimeVoice
-  };
+function voiceStatus(startedAtMs) {
+  return buildVoiceHealth(config, { startedAtMs });
 }
 
 async function handleUpgrade(req, socket) {
@@ -1092,7 +1086,7 @@ function buildNowSnapshot() {
       model: realtime.model,
       voice: realtime.voice,
       label: realtime.enabled ? "Voz realtime pronta" : "Voz local em fallback",
-      detail: realtime.enabled ? `${realtime.model} · voz ${realtime.voice}` : "Configure a chave do provider para conversa ao vivo."
+      detail: realtime.enabled ? `${realtime.model} · voz ${realtime.voice}` : (realtime.fallbackReason || "Configure a chave do provider para conversa ao vivo.")
     },
     activeJob: activeJob ? summarizeJob(activeJob) : null,
     jobRef: activeJob ? nowJobReference(activeJob) : null,

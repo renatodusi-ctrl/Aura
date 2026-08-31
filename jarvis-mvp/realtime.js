@@ -19,6 +19,9 @@ export class RealtimeClient {
 
   async connect() {
     const status = await fetch("/api/status").then((response) => response.json()).catch(() => ({}));
+    if (!status.realtimeEnabled) {
+      throw new Error(status.voice?.fallbackReason || "Voice realtime provider is not configured.");
+    }
     if (status.realtimeProvider === "gemini") {
       return this.connectGemini();
     }
