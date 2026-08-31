@@ -15,7 +15,7 @@ const JOB_STATUS_TRANSITIONS = new Map([
   ["awaiting_confirm", new Set(["queued", "failed", "cancelled"])],
   ["queued", new Set(["running", "failed", "cancelled"])],
   ["running", new Set(["needs_input", "done", "failed", "cancelled"])],
-  ["needs_input", new Set(["running", "failed", "cancelled"])],
+  ["needs_input", new Set(["awaiting_confirm", "queued", "running", "failed", "cancelled"])],
   ["done", new Set()],
   ["failed", new Set()],
   ["cancelled", new Set()]
@@ -671,6 +671,31 @@ export function updateJobDraft(id, { goal, mode }) {
   insertJobEvent(current.id, "job.draft_updated", "Draft job updated.", {
     goal: nextGoal,
     mode: nextMode
+  });
+
+  return getJob(id);
+}
+
+export function updateJobMetadata(id, patch = {}) {
+  const current = getJob(id);
+  if (!current) {
+    throw new Error("Job not found.");
+  }
+
+  const normalizedPatch = redactObject(normalizeJsonObject(patch, "Job metadata patch"));
+  const nextMetadata = {
+    ...(current.metadata || {}),
+    ...normalizedPatch
+  };
+
+  db.prepare(`
+    UPDATE jobs
+    SET metadata = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(JSON.stringify(nextMetadata), Number(id));
+
+  insertJobEvent(current.id, "job.metadata_updated", "Job metadata updated.", {
+    keys: Object.keys(normalizedPatch)
   });
 
   return getJob(id);

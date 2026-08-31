@@ -129,6 +129,8 @@ try {
   assert.ok(fakeImplement.artifacts.some((artifact) => artifact.kind === "diff" && artifact.content.includes("fake implement change")));
   assert.ok(fakeImplement.artifacts.some((artifact) => artifact.kind === "test-log" && artifact.content.includes("tests ok")));
   assert.ok(fakeImplement.artifacts.some((artifact) => artifact.kind === "codex-summary"));
+  assert.ok(fakeImplement.artifacts.some((artifact) => artifact.kind === "critic-review" && artifact.content.includes("AURA Critic Review")));
+  assert.ok(fakeImplement.artifacts.some((artifact) => artifact.kind === "critic-review" && artifact.metadata.gate === "pass"));
   const implementEvents = listJobEvents(implementJob.id).map((event) => event.type);
   assert.ok(implementEvents.includes("codex.implement.started"));
   assert.ok(implementEvents.includes("codex.implement.finished"));
@@ -148,6 +150,71 @@ try {
     /explicit visual confirmation/
   );
   updateJobStatus(unconfirmedJob.id, "cancelled", { summary: "Release confirmation gate fixture." });
+
+  const safetyTextWorkspace = createGitWorkspace();
+  const safetyTextJob = createJob({
+    goal: "Apply the approved patch. Do not run git push, git reset, or destructive delete commands.",
+    workspace: safetyTextWorkspace,
+    mode: "implement",
+    policyLevel: "write",
+    requiresConfirmation: true,
+    timeoutMs: 5000,
+    metadata: {
+      plan: "Append one line while avoiding git push and git reset.",
+      risk: "Low risk because forbidden commands are prohibited, not requested.",
+      likelyFiles: ["README.md"]
+    }
+  });
+  jobIds.push(safetyTextJob.id);
+  updateJobStatus(safetyTextJob.id, "awaiting_confirm", { summary: "Needs confirmation." });
+  const safetyTextRun = await runCodexImplement({
+    jobId: safetyTextJob.id,
+    prompt: "Implement only the approved change. Never run git push.",
+    confirmed: true,
+    bin: fakeCodex,
+    timeoutMs: 5000,
+    testCommand: false
+  });
+  assert.equal(safetyTextRun.job.status, "needs_input");
+  assert.ok(safetyTextRun.result.changedFiles.includes("README.md"));
+  assert.ok(safetyTextRun.artifacts.some((artifact) => artifact.kind === "critic-review" && artifact.metadata.gate === "review"));
+  assert.ok(safetyTextRun.artifacts.some((artifact) => artifact.kind === "rollback-plan" && artifact.content.includes("Safe Rollback Plan")));
+  assert.ok(safetyTextRun.artifacts.some((artifact) => artifact.kind === "independent-critic-brief" && artifact.content.includes("Independent Critic Brief")));
+  assert.ok(safetyTextRun.artifacts.some((artifact) => artifact.kind === "independent-critic-review" && artifact.metadata.source === "codex-read-only"));
+
+  const blockedByCriticWorkspace = createGitWorkspace();
+  const blockedByCriticJob = createJob({
+    goal: "Verify critic gate blocks failing tests",
+    workspace: blockedByCriticWorkspace,
+    mode: "implement",
+    policyLevel: "write",
+    requiresConfirmation: true,
+    timeoutMs: 5000,
+    metadata: {
+      plan: "Append one line and run a failing verification.",
+      likelyFiles: ["README.md"]
+    }
+  });
+  jobIds.push(blockedByCriticJob.id);
+  updateJobStatus(blockedByCriticJob.id, "awaiting_confirm", { summary: "Needs confirmation." });
+  const blockedByCritic = await runCodexImplement({
+    jobId: blockedByCriticJob.id,
+    prompt: "Append one line to README.",
+    confirmed: true,
+    bin: fakeCodex,
+    timeoutMs: 5000,
+    testCommand: {
+      command: process.execPath,
+      args: ["-e", "process.exit(1)"],
+      timeoutMs: 5000
+    }
+  });
+  assert.equal(blockedByCritic.job.status, "needs_input");
+  assert.match(blockedByCritic.job.error, /critic gate blocked/i);
+  assert.ok(blockedByCritic.artifacts.some((artifact) => artifact.kind === "critic-review" && artifact.metadata.gate === "block"));
+  assert.ok(blockedByCritic.artifacts.some((artifact) => artifact.kind === "rollback-plan" && artifact.metadata.criticGate === "block"));
+  assert.ok(blockedByCritic.artifacts.some((artifact) => artifact.kind === "independent-critic-brief" && artifact.metadata.status === "ready_for_read_only_review"));
+  assert.ok(blockedByCritic.artifacts.some((artifact) => artifact.kind === "independent-critic-review" && artifact.content.includes("FAKE_CODEX_LAST_MESSAGE")));
 
   const blockedJob = createJob({
     goal: "Run git push after edits",
@@ -205,17 +272,17 @@ function createFakeCodex() {
   if (process.platform === "win32") {
     fs.writeFileSync(scriptPath, [
       "@echo off",
-      "if \"%1\"==\"--version\" echo codex-cli fake& exit /b 0",
+      "if \"%~1\"==\"--version\" echo codex-cli fake& exit /b 0",
       "echo %* | findstr /C:\"workspace-write\" >nul",
       "if not errorlevel 1 echo fake implement change>>README.md",
       "echo %*",
       ":loop",
-      "if \"%1\"==\"--output-last-message\" (",
-      "  echo FAKE_CODEX_LAST_MESSAGE>%2",
+      "if \"%~1\"==\"--output-last-message\" (",
+      "  echo FAKE_CODEX_LAST_MESSAGE>\"%~2\"",
       "  exit /b 0",
       ")",
       "shift",
-      "if not \"%1\"==\"\" goto loop",
+      "if not \"%~1\"==\"\" goto loop",
       "exit /b 0"
     ].join("\r\n"));
   } else {

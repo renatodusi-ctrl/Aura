@@ -82,6 +82,67 @@ button.secondary {
   background: rgba(25, 29, 36, .82);
 }
 
+.now-hud {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(88, 196, 184, .32);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(88, 196, 184, .08), rgba(17, 21, 27, .92));
+}
+
+.now-hud-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.now-hud-main span {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.now-hud-main strong {
+  overflow-wrap: anywhere;
+}
+
+.now-hud-main p {
+  color: var(--muted);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.now-hud-facts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.now-hud-facts span {
+  display: grid;
+  gap: 2px;
+  min-width: 112px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #10141a;
+}
+
+.now-hud-facts small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.now-hud-facts strong {
+  font-size: 13px;
+}
+
 .brand-lockup {
   display: flex;
   align-items: center;
@@ -257,7 +318,9 @@ h2 {
   border-color: rgba(123, 216, 143, .38);
 }
 
-.integration-card.checking {
+.integration-card.checking,
+.integration-card.detected,
+.integration-card.circuit_open {
   border-color: rgba(242, 184, 75, .38);
 }
 
@@ -450,6 +513,26 @@ h2 {
   color: var(--danger);
 }
 
+.recovery-actions {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  align-items: end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.recovery-actions textarea {
+  min-height: 42px;
+  resize: vertical;
+}
+
+.council-decision-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .active-demand-technical {
   display: grid;
   gap: 8px;
@@ -472,6 +555,29 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #11151b;
+}
+
+.artifact-diff,
+.artifact-changed-files {
+  border-color: rgba(82, 168, 255, .38);
+}
+
+.artifact-test-log,
+.artifact-critic-review {
+  border-color: rgba(123, 216, 143, .36);
+}
+
+.artifact-critic-review.gate-review {
+  border-color: rgba(242, 184, 75, .42);
+}
+
+.artifact-critic-review.gate-block {
+  border-color: rgba(239, 107, 107, .42);
+}
+
+.artifact-analyst-response,
+.artifact-evidence-brief {
+  border-color: rgba(242, 184, 75, .34);
 }
 
 .artifact-card div:first-child {
@@ -503,6 +609,40 @@ h2 {
 .active-demand-council {
   display: grid;
   gap: 10px;
+}
+
+.council-decision {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(123, 216, 143, .42);
+  border-radius: 6px;
+  background: rgba(123, 216, 143, .07);
+}
+
+.council-decision > strong {
+  color: var(--ok);
+}
+
+.council-decision p {
+  margin: 0;
+  line-height: 1.42;
+}
+
+.council-decision-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.council-decision-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.council-decision-facts dd {
+  margin: 0;
 }
 
 .demand-timeline {
@@ -831,11 +971,13 @@ select {
   border-color: rgba(123, 216, 143, .45);
 }
 
-.integration-card.checking .integration-dot {
+.integration-card.checking .integration-dot,
+.integration-card.detected .integration-dot {
   background: var(--accent-2);
 }
 
-.integration-card.checking .integration-state {
+.integration-card.checking .integration-state,
+.integration-card.detected .integration-state {
   color: var(--accent-2);
   border-color: rgba(242, 184, 75, .45);
 }
@@ -1554,6 +1696,18 @@ video {
   color: var(--text);
 }
 
+.select-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  color: var(--muted);
+}
+
+.select-control select {
+  width: 128px;
+}
+
 .checkbox-control input {
   min-width: 18px;
   width: 18px;
@@ -1725,6 +1879,19 @@ video {
     width: 100%;
   }
 
+  .now-hud {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .now-hud-facts {
+    justify-content: flex-start;
+  }
+
+  .now-hud > button {
+    width: 100%;
+  }
+
   .side-panel {
     position: static;
   }
@@ -1741,6 +1908,14 @@ video {
   .debate-controls {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .council-decision-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .recovery-actions {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1765,6 +1940,7 @@ video {
   .cost-breakdown-grid,
   .cost-chart-grid,
   .mission-overview,
+  .council-decision-facts,
   .cost-hero,
   .cost-metrics.compact {
     grid-template-columns: 1fr;

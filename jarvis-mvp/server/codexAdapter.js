@@ -11,6 +11,7 @@ import {
   updateJobStatus
 } from "./memory.js";
 import { runJobCommand } from "./supervisor.js";
+import { filteredToolEnv, prepareToolSpawn } from "./processTools.js";
 
 const DEFAULT_CODEX_BIN = "codex";
 const BLOCKED_IMPLEMENT_PATTERNS = [
@@ -207,7 +208,8 @@ export async function runCodexImplement({
     args,
     cwd: queued.workspace,
     timeoutMs: timeoutMs || queued.timeoutMs,
-    input: finalPrompt
+    input: finalPrompt,
+    finalize: false
   });
 
   const lastMessage = readOptionalFile(outputPath);
@@ -275,24 +277,106 @@ export async function runCodexImplement({
     }));
   }
 
-  const latest = getJob(job.id);
-  const finalSummary = buildImplementSummary({
-    status: latest.status,
-    lastMessage,
+  const criticReview = buildCriticReview({
+    job: queued,
     changedFiles: changedFileList,
+    diff: diff.stdout || diff.stderr || "",
     testResult,
     result
   });
-  const finalJob = updateJobStatus(job.id, latest.status, {
+  const processStatus = statusFromImplementProcess(result);
+  const processError = errorFromImplementProcess(result, timeoutMs || queued.timeoutMs);
+  const finalStatus = finalStatusForImplement({ processStatus, criticGate: criticReview.gate });
+  artifacts.push(createJobArtifact(job.id, {
+    kind: "critic-review",
+    label: "AURA critic review",
+    content: criticReview.content,
+    metadata: {
+      source: "local-rules",
+      gate: criticReview.gate,
+      risks: criticReview.risks,
+      changedFiles: changedFileList,
+      testExitCode: testResult?.exitCode ?? null,
+      codexExitCode: result.exitCode
+    }
+  }));
+
+  if (finalStatus === "needs_input") {
+    const rollbackPlan = buildRollbackPlan({
+      job: queued,
+      changedFiles: changedFileList,
+      diff: diff.stdout || diff.stderr || "",
+      criticReview
+    });
+    const independentCriticBrief = buildIndependentCriticBrief({
+      job: queued,
+      changedFiles: changedFileList,
+      diff: diff.stdout || diff.stderr || "",
+      testResult,
+      criticReview
+    });
+    artifacts.push(createJobArtifact(job.id, {
+      kind: "rollback-plan",
+      label: "Safe rollback plan",
+      content: rollbackPlan,
+      metadata: {
+        strategy: "operator-reviewed",
+        destructiveCommandsUsed: false,
+        changedFiles: changedFileList,
+        criticGate: criticReview.gate
+      }
+    }));
+    artifacts.push(createJobArtifact(job.id, {
+      kind: "independent-critic-brief",
+      label: "Independent critic brief",
+      content: independentCriticBrief,
+      metadata: {
+        status: "ready_for_read_only_review",
+        criticGate: criticReview.gate,
+        suggestedReviewer: "codex-ask-or-analyst"
+      }
+    }));
+    const independentReview = await runIndependentCriticReview({
+      codex,
+      job: queued,
+      brief: independentCriticBrief,
+      timeoutMs: Math.min(timeoutMs || queued.timeoutMs || 120000, 120000)
+    });
+    artifacts.push(createJobArtifact(job.id, {
+      kind: "independent-critic-review",
+      label: "Independent critic review",
+      content: independentReview.content,
+      metadata: {
+        source: "codex-read-only",
+        attempted: true,
+        exitCode: independentReview.exitCode,
+        signal: independentReview.signal,
+        timedOut: independentReview.timedOut
+      }
+    }));
+  }
+
+  const finalError = errorForImplementFinalStatus({ finalStatus, processError, criticReview });
+  const finalSummary = buildImplementSummary({
+    status: finalStatus,
+    lastMessage,
+    changedFiles: changedFileList,
+    testResult,
+    result,
+    criticReview
+  });
+  const finalJob = updateJobStatus(job.id, finalStatus, {
     summary: finalSummary,
-    error: latest.status === "failed" ? latest.error : null
+    error: finalError
   });
 
   recordJobEvent(job.id, "codex.implement.finished", "Codex implement finished with artifacts.", {
     status: finalJob.status,
     changedFiles: changedFileList,
     testCommand: normalizedTestCommand,
-    testExitCode: testResult?.exitCode ?? null
+    testExitCode: testResult?.exitCode ?? null,
+    criticReview: true,
+    qualityGate: criticReview.gate
   });
 
   return {
@@ -337,7 +421,7 @@ function assertImplementJob(job, confirmed) {
     throw new Error("Codex implement requires policyLevel=write.");
   }
 
-  if (job.status !== "awaiting_confirm") {
+  if (job.status !== "awaiting_confirm" && job.status !== "needs_input") {
     throw new Error(`Codex implement cannot run while job status is ${job.status}.`);
   }
 
@@ -348,11 +432,67 @@ function assertImplementJob(job, confirmed) {
 
 function assertNoBlockedImplementIntent(values) {
   const text = values.filter(Boolean).join("\n");
-  for (const entry of BLOCKED_IMPLEMENT_PATTERNS) {
-    if (entry.pattern.test(text)) {
-      throw new Error(`Blocked command in Codex implement request: ${entry.name}.`);
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    for (const entry of BLOCKED_IMPLEMENT_PATTERNS) {
+      if (entry.pattern.test(trimmed) && !isBlockedCommandProhibition(trimmed)) {
+        throw new Error(`Blocked command in Codex implement request: ${entry.name}.`);
+      }
     }
   }
+}
+
+function statusFromImplementProcess(result) {
+  if (result.cancelled) {
+    return "cancelled";
+  }
+  if (result.timedOut || result.exitCode !== 0) {
+    return "failed";
+  }
+  return "done";
+}
+
+function errorFromImplementProcess(result, timeoutMs) {
+  if (result.cancelled) {
+    return null;
+  }
+  if (result.timedOut) {
+    return `Process timed out after ${timeoutMs}ms.`;
+  }
+  if (result.exitCode !== 0) {
+    return `Process exited with code ${result.exitCode ?? "unknown"}${result.signal ? ` and signal ${result.signal}` : ""}.`;
+  }
+  return null;
+}
+
+function finalStatusForImplement({ processStatus, criticGate }) {
+  if (processStatus !== "done") {
+    return processStatus;
+  }
+  if (criticGate === "block" || criticGate === "review") {
+    return "needs_input";
+  }
+  return "done";
+}
+
+function errorForImplementFinalStatus({ finalStatus, processError, criticReview }) {
+  if (processError) {
+    return processError;
+  }
+  if (finalStatus === "needs_input") {
+    if (criticReview.gate === "block") {
+      return `AURA critic gate blocked completion: ${criticReview.risks.join(" ") || "review required"}`;
+    }
+    return `AURA critic gate requires human review: ${criticReview.risks.join(" ") || "limited confidence"}`;
+  }
+  return null;
+}
+
+function isBlockedCommandProhibition(line) {
+  return /\b(?:do not|don't|dont|never|avoid|blocked|prohibited|sem|nao|não|evite|bloqueado|proibido)\b/i.test(line);
 }
 
 function buildAskPrompt(prompt) {
@@ -384,19 +524,180 @@ function buildImplementPrompt(prompt, job) {
   ].join("\n");
 }
 
-function buildImplementSummary({ status, lastMessage, changedFiles, testResult, result }) {
+function buildImplementSummary({ status, lastMessage, changedFiles, testResult, result, criticReview }) {
   const files = changedFiles.length ? changedFiles.join(", ") : "no files reported by git diff";
   const commands = ["codex exec --sandbox workspace-write"];
   if (testResult) {
     commands.push(`test command exit ${testResult.exitCode}`);
   }
   const codexOutcome = status === "done" ? "Codex implementation completed." : `Codex implementation ended as ${status}.`;
+  const gateSummary = criticReview?.gate ? `AURA critic gate: ${criticReview.gate}.` : "";
   return [
     lastMessage || codexOutcome,
     `Changed files: ${files}.`,
     `Relevant commands: ${commands.join("; ")}.`,
+    gateSummary,
     result.timedOut ? "Codex process timed out." : ""
   ].filter(Boolean).join(" ");
+}
+
+function buildCriticReview({ job, changedFiles, diff, testResult, result }) {
+  const plan = job.metadata?.plan || job.metadata?.planSummary || "No approved plan captured.";
+  const checks = [];
+  checks.push(result.exitCode === 0
+    ? "Codex process exited successfully."
+    : `Codex process exited with code ${result.exitCode}.`);
+  checks.push(changedFiles.length
+    ? `Workspace diff reports changed files: ${changedFiles.join(", ")}.`
+    : "Workspace diff reports no changed files.");
+  if (testResult) {
+    checks.push(testResult.exitCode === 0
+      ? "Post-implementation test command passed."
+      : `Post-implementation test command failed with code ${testResult.exitCode}.`);
+  } else {
+    checks.push("No post-implementation test command ran.");
+  }
+
+  const risks = [];
+  if (!changedFiles.length && result.exitCode === 0) {
+    risks.push("Codex reported success but no file changes were detected.");
+  }
+  if (testResult && testResult.exitCode !== 0) {
+    risks.push("The implementation needs follow-up because tests did not pass.");
+  }
+  if (!testResult) {
+    risks.push("Confidence is limited because no automated verification ran after implementation.");
+  }
+  if (!String(diff || "").trim()) {
+    risks.push("No diff content is available for review.");
+  }
+  const gate = criticGateFor({ risks, testResult, result, changedFiles });
+
+  const content = [
+    "# AURA Critic Review",
+    "",
+    `Job: #${job.id}`,
+    `Approved plan: ${plan}`,
+    `Quality gate: ${gate}`,
+    "",
+    "## Checks",
+    ...checks.map((item) => `- ${item}`),
+    "",
+    "## Risks",
+    ...(risks.length ? risks.map((item) => `- ${item}`) : ["- No immediate local critic risks found."]),
+    "",
+    "## Recommendation",
+    risks.length
+      ? "Review the risks above before treating this demand as complete."
+      : "Treat this demand as locally verified; external critic review is optional."
+  ].join("\n");
+  return { content, gate, risks };
+}
+
+function buildRollbackPlan({ job, changedFiles, diff, criticReview }) {
+  const files = changedFiles.length ? changedFiles.map((file) => `- ${file}`) : ["- No changed files reported."];
+  const hasDiff = Boolean(String(diff || "").trim());
+  return [
+    "# Safe Rollback Plan",
+    "",
+    `Job: #${job.id}`,
+    `Critic gate: ${criticReview.gate}`,
+    "",
+    "## Changed Files",
+    ...files,
+    "",
+    "## Operator Steps",
+    "- Review the diff artifact before accepting or reverting any change.",
+    "- If the change is useful, add a recovery note and resume the implementation from the cockpit.",
+    "- If the change is unsafe, revert only the listed files manually or in a separate confirmed job.",
+    "- Do not run broad reset/clean commands; keep rollback scoped to the listed files.",
+    "",
+    "## Diff Availability",
+    hasDiff
+      ? "A diff artifact is available for targeted review."
+      : "No diff content was captured; inspect the workspace before deciding."
+  ].join("\n");
+}
+
+function buildIndependentCriticBrief({ job, changedFiles, diff, testResult, criticReview }) {
+  return [
+    "# Independent Critic Brief",
+    "",
+    "Review this implementation in read-only mode. Do not edit files.",
+    "",
+    `Job: #${job.id}`,
+    `Goal: ${job.goal}`,
+    `Approved plan: ${job.metadata?.plan || job.metadata?.planSummary || "No approved plan captured."}`,
+    `Local critic gate: ${criticReview.gate}`,
+    "",
+    "## Changed Files",
+    ...(changedFiles.length ? changedFiles.map((file) => `- ${file}`) : ["- No changed files reported."]),
+    "",
+    "## Local Critic Risks",
+    ...(criticReview.risks.length ? criticReview.risks.map((risk) => `- ${risk}`) : ["- No local critic risks found."]),
+    "",
+    "## Test Result",
+    testResult ? `Exit code: ${testResult.exitCode}` : "No automated verification ran.",
+    "",
+    "## Review Questions",
+    "- Does the diff match the approved plan?",
+    "- Are there hidden regressions or missing tests?",
+    "- Should the operator resume, revise the plan, or roll back the listed files?",
+    "",
+    "## Diff Excerpt",
+    String(diff || "").trim().slice(0, 6000) || "No diff content captured."
+  ].join("\n");
+}
+
+async function runIndependentCriticReview({ codex, job, brief, timeoutMs }) {
+  const outputPath = path.join(DATA_DIR, `aura-independent-critic-${job.id}-${Date.now()}.txt`);
+  const args = [
+    "exec",
+    "--cd",
+    job.workspace,
+    "--sandbox",
+    "read-only",
+    "--color",
+    "never",
+    "--output-last-message",
+    outputPath,
+    "-"
+  ];
+  recordJobEvent(job.id, "critic.independent_started", "Independent critic started in read-only mode.", {
+    source: "codex-read-only",
+    sandbox: "read-only"
+  });
+  const result = await captureCommand(codex.bin, args, job.workspace, timeoutMs, brief);
+  const lastMessage = readOptionalFile(outputPath);
+  removeOptionalFile(outputPath);
+  const content = [
+    lastMessage,
+    result.stdout,
+    result.stderr
+  ].filter(Boolean).join("\n").trim() || "Independent critic produced no text.";
+
+  recordJobEvent(job.id, "critic.independent_finished", "Independent critic finished.", {
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    hasContent: Boolean(content)
+  });
+
+  return {
+    content,
+    exitCode: result.exitCode,
+    signal: result.signal,
+    timedOut: result.timedOut
+  };
+}
+
+function criticGateFor({ risks, testResult, result, changedFiles }) {
+  if (result.exitCode !== 0 || testResult?.exitCode > 0) {
+    return "block";
+  }
+  if (!changedFiles.length || risks.length) {
+    return "review";
+  }
+  return "pass";
 }
 
 function metadataText(metadata = {}) {
@@ -447,7 +748,7 @@ function normalizeTestCommand(testCommand, workspace) {
   return null;
 }
 
-function captureCommand(command, args, cwd, timeoutMs = 10000) {
+function captureCommand(command, args, cwd, timeoutMs = 10000, input = "") {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (result) => {
@@ -459,11 +760,19 @@ function captureCommand(command, args, cwd, timeoutMs = 10000) {
       resolve(result);
     };
 
-    const child = spawn(command, args, {
+    const env = filteredProbeEnv();
+    const prepared = prepareToolSpawn(command, args, env);
+    const child = spawn(prepared.command, prepared.args, {
       cwd,
-      env: filteredProbeEnv(),
+      env,
+      ...prepared.options,
       windowsHide: true
     });
+    if (input) {
+      child.stdin?.end(input);
+    } else {
+      child.stdin?.end();
+    }
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -491,8 +800,11 @@ function captureCommand(command, args, cwd, timeoutMs = 10000) {
 function runProbe(command, args) {
   return new Promise((resolve) => {
     const child = import("node:child_process").then(({ spawn }) => {
-      const proc = spawn(command, args, {
-        env: filteredProbeEnv(),
+      const env = filteredProbeEnv();
+      const prepared = prepareToolSpawn(command, args, env);
+      const proc = spawn(prepared.command, prepared.args, {
+        env,
+        ...prepared.options,
         windowsHide: true
       });
       let stdout = "";
@@ -515,13 +827,7 @@ function runProbe(command, args) {
 }
 
 function filteredProbeEnv() {
-  const env = {};
-  for (const name of ["PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP", "SystemRoot", "ComSpec", "PATHEXT"]) {
-    if (process.env[name]) {
-      env[name] = process.env[name];
-    }
-  }
-  return env;
+  return filteredToolEnv();
 }
 
 function readOptionalFile(filePath) {

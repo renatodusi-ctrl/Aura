@@ -5,7 +5,17 @@ import os from "node:os";
 import path from "node:path";
 import { config } from "../server/config.js";
 import { createJob, initMemory, listJobArtifacts, listJobEvents } from "../server/memory.js";
-import { buildEvidenceBrief, detectAnalyst, normalizeAnalystResponse, runAnalysts } from "../server/analystAdapter.js";
+import {
+  analystCircuitState,
+  buildEvidenceBrief,
+  cancelAnalystJobProcess,
+  detectAnalyst,
+  hasActiveAnalystJobProcess,
+  healthCheckAnalyst,
+  normalizeAnalystResponse,
+  resetAnalystCircuit,
+  runAnalysts
+} from "../server/analystAdapter.js";
 
 initMemory();
 
@@ -38,6 +48,20 @@ try {
   }));
   assert.deepEqual(normalized.findings, ["finding"]);
   assert.equal(normalized.confidence, "high");
+  assert.equal(normalized.validSchema, true);
+
+  const wrapped = normalizeAnalystResponse(JSON.stringify({
+    text: "{\"findings\":[\"wrapped finding\"],\"risks\":[],\"open_questions\":[],\"recommendation\":\"wrapped\",\"confidence\":\"medium\"}",
+    structuredOutput: {
+      findings: ["structured finding"],
+      risks: [],
+      open_questions: [],
+      recommendation: "structured",
+      confidence: "medium"
+    }
+  }));
+  assert.deepEqual(wrapped.findings, ["structured finding"]);
+  assert.equal(wrapped.validSchema, true);
 
   const job = createJob({
     goal: "Verify shared analyst brief",
@@ -51,34 +75,65 @@ try {
   const context = {
     constraints: ["Read-only analysis.", "Do not run Git commands."],
     files: ["server/analystAdapter.js"],
+    focusTerms: ["buildEvidenceBrief"],
     findings: ["Adapters should normalize output."],
     attempted: ["Created job kernel."]
   };
   const brief = buildEvidenceBrief(job, context);
   assert.match(brief, /AURA Evidence Brief/);
   assert.match(brief, /server\/analystAdapter\.js/);
+  assert.match(brief, /File Evidence/);
+  assert.match(brief, /buildEvidenceBrief/);
+
+  const largeEvidenceWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "aura-large-evidence-"));
+  tempDirs.push(largeEvidenceWorkspace);
+  const largeEvidenceFile = path.join(largeEvidenceWorkspace, "large-app.js");
+  fs.writeFileSync(largeEvidenceFile, [
+    "x".repeat(9000),
+    "function renderCouncilDecisionCard() { return 'decision'; }",
+    "y".repeat(9000)
+  ].join("\n"));
+  const largeEvidenceJob = createJob({
+    goal: "Verify large evidence excerpts",
+    workspace: largeEvidenceWorkspace,
+    mode: "analyze",
+    policyLevel: "read",
+    timeoutMs: 5000
+  });
+  jobIds.push(largeEvidenceJob.id);
+  const largeBrief = buildEvidenceBrief(largeEvidenceJob, { files: ["large-app.js"] });
+  assert.doesNotMatch(largeBrief, /file is too large/i);
+  assert.match(largeBrief, /renderCouncilDecisionCard/);
+  assert.match(largeBrief, /Excerpt selected by AURA evidence budget/);
 
   const output = await runAnalysts({
     jobId: job.id,
-    context,
+    context: { ...context, includeFileEvidence: false },
     consent: { gemini: true, grok: true, openrouter: true },
     bins: { gemini: fakeGemini, grok: fakeGrok, openrouter: fakeOpenRouter },
-    timeoutMs: 5000
+    timeoutMs: 5000,
+    debateRounds: 2
   });
 
   assert.equal(output.job.status, "done");
-  assert.equal(output.analysts.length, 3);
+  assert.equal(output.analysts.length, 6);
+  assert.ok(output.analysts.every((entry) => entry.detection.usable === true));
   assert.ok(output.analysts.every((entry) => entry.response.findings.length));
   assert.ok(output.analysts.every((entry) => entry.response.confidence === "medium"));
 
   const artifacts = listJobArtifacts(job.id);
   assert.ok(artifacts.some((artifact) => artifact.kind === "evidence-brief" && artifact.content.includes("Verify shared analyst brief")));
-  assert.equal(artifacts.filter((artifact) => artifact.kind === "analyst-response").length, 3);
+  assert.ok(artifacts.some((artifact) => artifact.kind === "evidence-brief" && artifact.metadata.round === 2));
+  assert.equal(artifacts.filter((artifact) => artifact.kind === "analyst-response").length, 6);
+  assert.equal(artifacts.filter((artifact) => artifact.kind === "analyst-response" && artifact.metadata.round === 2).length, 3);
 
   const events = listJobEvents(job.id).map((event) => event.type);
   assert.ok(events.includes("analysts.consent"));
+  assert.ok(events.includes("analyst.health_checked"));
   assert.ok(events.includes("analyst.started"));
   assert.ok(events.includes("analyst.finished"));
+  assert.ok(events.includes("analyst.debate_round_started"));
+  assert.ok(events.includes("analyst.debate_round_finished"));
 
   const blockedJob = createJob({
     goal: "Verify analyst consent gate",
@@ -107,11 +162,55 @@ try {
     bins: { gemini: "__aura_missing_gemini_binary__" },
     timeoutMs: 1000
   });
-  assert.equal(missing.job.status, "failed");
+  assert.equal(missing.job.status, "needs_input");
+  assert.match(missing.job.error, /Nenhum analista/i);
   assert.equal(missing.analysts[0].detection.available, false);
+  assert.equal(missing.analysts[0].detection.usable, false);
+
+  const recovered = await runAnalysts({
+    jobId: missingJob.id,
+    consent: { gemini: true },
+    bins: { gemini: fakeGemini },
+    timeoutMs: 5000
+  });
+  assert.equal(recovered.job.status, "done");
+  assert.equal(recovered.analysts[0].detection.usable, true);
+
+  resetAnalystCircuit("grok");
+  const badGrok = createBadHealthAnalyst("grok");
+  const badHealth = await healthCheckAnalyst("grok", { bin: badGrok, timeoutMs: 1000 });
+  assert.equal(badHealth.usable, false);
+  assert.equal(analystCircuitState("grok").open, true);
+  const circuitHealth = await healthCheckAnalyst("grok", { bin: badGrok, timeoutMs: 1000 });
+  assert.equal(circuitHealth.health, "circuit_open");
+  assert.equal(circuitHealth.available, false);
+  resetAnalystCircuit("grok");
+
+  const hangingGemini = createHangingAnalyst("gemini");
+  const cancelAnalystJob = createJob({
+    goal: "Verify analyst cancel",
+    workspace: process.cwd(),
+    mode: "analyze",
+    policyLevel: "read",
+    timeoutMs: 5000
+  });
+  jobIds.push(cancelAnalystJob.id);
+  const runningAnalyst = runAnalysts({
+    jobId: cancelAnalystJob.id,
+    consent: { gemini: true },
+    bins: { gemini: hangingGemini },
+    timeoutMs: 5000
+  });
+  await waitUntil(() => hasActiveAnalystJobProcess(cancelAnalystJob.id), 1500);
+  assert.equal(cancelAnalystJobProcess(cancelAnalystJob.id), true);
+  const cancelledAnalyst = await runningAnalyst;
+  assert.equal(cancelledAnalyst.job.status, "cancelled");
+  assert.equal(hasActiveAnalystJobProcess(cancelAnalystJob.id), false);
+  assert.ok(listJobEvents(cancelAnalystJob.id).some((event) => event.type === "analyst.cancel_requested"));
 
   console.log("Analyst adapter verification passed.");
 } finally {
+  resetAnalystCircuit();
   const cleanup = new DatabaseSync(config.databasePath);
   cleanup.exec("PRAGMA foreign_keys = ON");
   for (const id of jobIds) {
@@ -121,6 +220,17 @@ try {
   for (const dir of tempDirs) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
+}
+
+async function waitUntil(predicate, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail("Timed out waiting for condition.");
 }
 
 function createFakeAnalyst(name) {
@@ -140,7 +250,7 @@ function createFakeAnalyst(name) {
       "@echo off",
       `if "%1"=="--version" echo ${name} fake& exit /b 0`,
       `if "%1"=="-v" echo ${name} fake& exit /b 0`,
-      "echo %* | findstr /C:\"approval-mode\" /C:\"permission-mode\" /C:\"code\" >nul",
+      "echo %* | findstr /C:\"approval-mode\" /C:\"permission-mode\" /C:\"no-plan\" /C:\"chat\" >nul",
       "if errorlevel 1 exit /b 2",
       `echo ${payload.replaceAll("\"", "\\\"")}`,
       "exit /b 0"
@@ -152,9 +262,64 @@ function createFakeAnalyst(name) {
       `  echo '${name} fake'`,
       "  exit 0",
       "fi",
-      "printf '%s ' \"$@\" | grep -Eq 'approval-mode|permission-mode|code' || exit 2",
+      "printf '%s ' \"$@\" | grep -Eq 'approval-mode|permission-mode|no-plan|chat' || exit 2",
       `printf '%s\\n' '${payload}'`,
       "exit 0"
+    ].join("\n"));
+    fs.chmodSync(scriptPath, 0o755);
+  }
+
+  return scriptPath;
+}
+
+function createBadHealthAnalyst(name) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `aura-bad-${name}-`));
+  tempDirs.push(dir);
+  const scriptPath = path.join(dir, process.platform === "win32" ? `${name}.cmd` : name);
+
+  if (process.platform === "win32") {
+    fs.writeFileSync(scriptPath, [
+      "@echo off",
+      `if "%1"=="--version" echo ${name} fake& exit /b 0`,
+      "echo not-json",
+      "exit /b 0"
+    ].join("\r\n"));
+  } else {
+    fs.writeFileSync(scriptPath, [
+      "#!/usr/bin/env sh",
+      "if [ \"$1\" = \"--version\" ]; then",
+      `  echo '${name} fake'`,
+      "  exit 0",
+      "fi",
+      "echo not-json",
+      "exit 0"
+    ].join("\n"));
+    fs.chmodSync(scriptPath, 0o755);
+  }
+
+  return scriptPath;
+}
+
+function createHangingAnalyst(name) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `aura-hang-${name}-`));
+  tempDirs.push(dir);
+  const scriptPath = path.join(dir, process.platform === "win32" ? `${name}.cmd` : name);
+
+  if (process.platform === "win32") {
+    fs.writeFileSync(scriptPath, [
+      "@echo off",
+      `if "%1"=="--version" echo ${name} fake& exit /b 0`,
+      `"${process.execPath}" -e "setTimeout(() => {}, 10000)"`,
+      "exit /b 0"
+    ].join("\r\n"));
+  } else {
+    fs.writeFileSync(scriptPath, [
+      "#!/usr/bin/env sh",
+      "if [ \"$1\" = \"--version\" ]; then",
+      `  echo '${name} fake'`,
+      "  exit 0",
+      "fi",
+      "node -e 'setTimeout(() => {}, 10000)'"
     ].join("\n"));
     fs.chmodSync(scriptPath, 0o755);
   }

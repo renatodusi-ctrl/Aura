@@ -2,6 +2,7 @@ import { RealtimeClient } from "./realtime.js";
 
 const state = {
   status: null,
+  now: null,
   tasks: [],
   memories: [],
   costs: null,
@@ -30,6 +31,7 @@ const els = {
   privacyPill: document.querySelector("#privacy-pill"),
   tasksPill: document.querySelector("#tasks-pill"),
   topNextStep: document.querySelector("#top-next-step"),
+  nowHud: document.querySelector("#now-hud"),
   routineToggle: document.querySelector("#routine-toggle"),
   voiceButton: document.querySelector("#voice-button"),
   screenButton: document.querySelector("#screen-button"),
@@ -390,8 +392,9 @@ function activeJobSummary() {
 }
 
 async function refreshAll() {
-  const [status, tasksData, memoriesData, jobsData, costsData] = await Promise.all([
+  const [status, nowData, tasksData, memoriesData, jobsData, costsData] = await Promise.all([
     api("/api/status"),
+    api("/api/now"),
     api("/api/tasks"),
     api("/api/memories"),
     api("/api/jobs?limit=20"),
@@ -399,12 +402,14 @@ async function refreshAll() {
   ]);
 
   state.status = status;
+  state.now = nowData.now;
   state.tasks = tasksData.tasks;
   state.memories = memoriesData.memories;
   state.jobs = jobsData.jobs;
   state.costs = costsData;
   await loadSelectedJob();
   renderStatus();
+  renderNowHud();
   renderTopNextStep();
   renderTopView();
   renderTasks();
@@ -421,12 +426,17 @@ async function refreshAll() {
 }
 
 async function refreshJobs() {
-  const jobsData = await api("/api/jobs?limit=20");
+  const [nowData, jobsData] = await Promise.all([
+    api("/api/now"),
+    api("/api/jobs?limit=20")
+  ]);
+  state.now = nowData.now;
   state.jobs = jobsData.jobs;
   await loadSelectedJob();
   renderJobs();
   renderCouncil();
   renderLocalContextSummary();
+  renderNowHud();
   renderTopNextStep();
 }
 
@@ -446,7 +456,7 @@ async function loadSelectedJob() {
   }
 
   if (!state.selectedJobId || !candidates.some((job) => job.id === state.selectedJobId)) {
-    state.selectedJobId = candidates[0].id;
+    state.selectedJobId = preferredMissionJob(candidates).id;
   }
 
   const detail = await api(`/api/jobs/${state.selectedJobId}`);
@@ -472,8 +482,104 @@ function renderStatus() {
   renderIntegrations();
 }
 
+function renderNowHud() {
+  if (!els.nowHud) {
+    return;
+  }
+
+  const now = state.now;
+  els.nowHud.replaceChildren();
+  if (!now) {
+    els.nowHud.hidden = true;
+    return;
+  }
+  els.nowHud.hidden = false;
+
+  const title = document.createElement("div");
+  title.className = "now-hud-main";
+  const eyebrow = document.createElement("span");
+  eyebrow.textContent = "Agora";
+  const headline = document.createElement("strong");
+  headline.textContent = now.headline || "AURA pronta";
+  const next = document.createElement("p");
+  next.textContent = now.nextStep || "Diga ou escreva uma missao para AURA organizar o trabalho.";
+  title.append(eyebrow, headline, next);
+
+  const facts = document.createElement("div");
+  facts.className = "now-hud-facts";
+  facts.append(
+    nowHudFact("Voz", now.realtime?.label || "Voz local"),
+    nowHudFact("Conselho", now.councilDecision ? `${now.councilDecision.roundsUsed || 1} rodada(s)` : "sem decisao ativa"),
+    nowHudFact("Bloqueios", formatInteger(now.blockers?.length || 0))
+  );
+
+  const action = document.createElement("button");
+  action.type = "button";
+  action.className = now.cta?.kind === "cancel" ? "danger-button" : "primary";
+  action.textContent = now.cta?.label || "Ver agora";
+  action.disabled = now.cta?.enabled === false;
+  action.addEventListener("click", () => runNowAction(now, action));
+
+  els.nowHud.append(title, facts, action);
+}
+
+function nowHudFact(label, value) {
+  const item = document.createElement("span");
+  const small = document.createElement("small");
+  small.textContent = label;
+  const strong = document.createElement("strong");
+  strong.textContent = value || "-";
+  item.append(small, strong);
+  return item;
+}
+
+async function runNowAction(now, button) {
+  const job = now?.activeJob;
+  if (!job) {
+    els.localInput?.focus();
+    return;
+  }
+
+  state.selectedJobId = job.id;
+  await loadSelectedJob();
+  renderJobs();
+  renderActiveDemand();
+
+  if (now.cta?.kind === "cancel") {
+    if (!confirm(`Cancelar demanda #${job.id}?`)) {
+      return;
+    }
+    await withBusyButton(button, "Cancelando", async () => {
+      const result = await api(`/api/jobs/${job.id}/cancel`, { method: "POST" });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      await refreshJobs();
+      logEvent("job.cancel", { id: job.id, status: result.job.status });
+    });
+    return;
+  }
+
+  if (now.cta?.kind === "approve" && job.status === "draft") {
+    await withBusyButton(button, "Aprovando", async () => {
+      const result = await api(`/api/jobs/${job.id}/approve`, { method: "POST" });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      await refreshJobs();
+      logEvent("job.approve", { id: job.id, status: result.job.status });
+    });
+    return;
+  }
+
+  document.querySelector(".active-demand-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 function renderTopNextStep() {
   if (!els.topNextStep) {
+    return;
+  }
+
+  if (state.now?.nextStep) {
+    els.topNextStep.textContent = state.now.nextStep;
     return;
   }
 
@@ -569,7 +675,7 @@ function integrationItemForProvider(name, provider = {}) {
     name: provider.label || name,
     role: roleForProvider(provider.name || name),
     detail: provider.available
-      ? provider.version || "CLI disponivel"
+      ? provider.note || provider.version || "CLI disponivel"
       : provider.error || "nao configurado neste ambiente",
     state: status
   };
@@ -595,6 +701,7 @@ function roleForProvider(name) {
 function labelForIntegrationState(status) {
   const labels = {
     available: "pronto",
+    detected: "detectado",
     unavailable: "off",
     checking: "local"
   };
@@ -649,9 +756,9 @@ function councilSeatFor(key, name, role, idleSummary) {
     return {
       name,
       role,
-      state: "ready",
-      label: provider?.available ? "pronto" : "aguardando",
-      summary: idleSummary
+      state: provider?.status === "detected" ? "waiting" : "ready",
+      label: provider?.status === "detected" ? "detectado" : provider?.available ? "pronto" : "aguardando",
+      summary: provider?.status === "detected" ? `${name} sera verificado antes de receber uma demanda.` : idleSummary
     };
   }
 
@@ -688,6 +795,9 @@ function analystCouncilState(job, key, name, role) {
     return { name, role, state: "ready", label: "respondeu", summary: `${name} ja contribuiu para esta demanda.` };
   }
   if (job.mode === "analyze") {
+    if (job.status === "needs_input") {
+      return { name, role, state: "error", label: "precisa acao", summary: `${name} sera verificado novamente se voce tentar de novo.` };
+    }
     if (job.status === "running") {
       return { name, role, state: "thinking", label: "pensando", summary: `${name} pode estar analisando esta demanda.` };
     }
@@ -930,6 +1040,24 @@ function filteredJobs() {
   return state.jobs.filter(predicate);
 }
 
+function preferredMissionJob(jobs) {
+  const priorityGroups = [
+    ["needs_input", "awaiting_confirm"],
+    ["running", "queued"],
+    ["draft"],
+    ["done"],
+    ["failed"],
+    ["cancelled"]
+  ];
+  for (const statuses of priorityGroups) {
+    const match = jobs.find((job) => statuses.includes(job.status));
+    if (match) {
+      return match;
+    }
+  }
+  return jobs[0];
+}
+
 function renderSessionTabs() {
   els.sessionTabButtons.forEach((button) => {
     button.setAttribute("aria-selected", String(button.dataset.sessionTab === state.sessionTab));
@@ -1072,8 +1200,12 @@ function renderActiveDemand() {
   const timeline = renderDemandTimeline(job);
   const security = renderSecurityBand(job);
   const alert = renderHumanFailure(job);
+  const councilDecision = renderCouncilDecisionCard();
   els.activeDemand.append(head, goal, meta, overview, tabs);
   els.activeDemand.append(timeline);
+  if (councilDecision) {
+    els.activeDemand.append(councilDecision);
+  }
   if (security) {
     els.activeDemand.append(security);
   }
@@ -1109,18 +1241,116 @@ function demandContextLabel(job) {
 }
 
 function renderHumanFailure(job) {
-  if (job.status !== "failed" || (!job.error && !job.summary)) {
+  if (!["failed", "needs_input"].includes(job.status) || (!job.error && !job.summary)) {
     return null;
   }
 
-  const panel = document.createElement("p");
+  const panel = document.createElement("section");
   panel.className = "active-demand-alert";
   const label = document.createElement("strong");
-  label.textContent = "Falha acionavel";
+  label.textContent = job.status === "needs_input" ? "AURA precisa de uma decisao" : "Falha acionavel";
   const copy = document.createElement("span");
   copy.textContent = humanizeJobMessage(job.error || job.summary);
   panel.append(label, copy);
+  const recovery = renderRecoveryActions(job);
+  if (recovery) {
+    panel.append(recovery);
+  }
   return panel;
+}
+
+function renderRecoveryActions(job) {
+  if (job.status !== "needs_input") {
+    return null;
+  }
+
+  const panel = document.createElement("form");
+  panel.className = "recovery-actions";
+
+  const guidance = document.createElement("textarea");
+  guidance.rows = 2;
+  guidance.placeholder = "Oriente a retomada desta demanda...";
+  guidance.setAttribute("aria-label", "Orientacao para retomar demanda");
+
+  if (job.mode === "analyze") {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "primary";
+    retry.textContent = "Retomar conselho";
+    retry.addEventListener("click", async () => {
+      await withBusyButton(retry, "Verificando", async () => {
+        await runAnalystConsultation(job, defaultAnalystConsent(), recoveryContext(guidance.value));
+      });
+    });
+    panel.append(guidance, retry);
+  }
+
+  if (job.mode === "implement") {
+    const resume = document.createElement("button");
+    resume.type = "button";
+    resume.className = "primary";
+    resume.textContent = "Retomar execucao";
+    resume.addEventListener("click", async () => {
+      if (!confirm(`Retomar demanda #${job.id} com permissao de escrita no workspace?`)) {
+        return;
+      }
+      await withBusyButton(resume, "Retomando", async () => {
+        let result = null;
+        try {
+          result = await api(`/api/jobs/${job.id}/codex/implement`, {
+            method: "POST",
+            body: {
+              confirmed: true,
+              prompt: recoveryPrompt(job, guidance.value),
+              timeoutMs: job.timeoutMs
+            }
+          });
+          state.selectedJob = result.job;
+          state.selectedJobEvents = result.events || [];
+          state.selectedJobArtifacts = result.artifacts || [];
+          appendMessage("system", `Demanda #${job.id} retomada com a orientacao informada.`);
+        } catch (error) {
+          applyJobErrorDetails(error);
+          appendMessage("system", `Retomada nao concluida: ${humanizeJobMessage(error.message, error.details)}`);
+        }
+        await refreshJobs();
+        logEvent("job.resume", { id: job.id, status: result?.job?.status || state.selectedJob?.status || "failed" });
+      });
+    });
+    panel.append(guidance, resume);
+  }
+
+  const skip = document.createElement("button");
+  skip.type = "button";
+  skip.className = "secondary";
+  skip.textContent = "Ignorar";
+  skip.addEventListener("click", async () => {
+    await withBusyButton(skip, "Ignorando", async () => {
+      const result = await api(`/api/jobs/${job.id}/skip`, { method: "POST" });
+      state.selectedJob = result.job;
+      state.selectedJobEvents = result.events || [];
+      state.selectedJobArtifacts = result.artifacts || [];
+      await refreshJobs();
+      appendMessage("system", `Demanda #${job.id} ignorada. Nenhuma acao foi executada.`);
+    });
+  });
+  panel.append(skip);
+
+  return panel;
+}
+
+function recoveryContext(note) {
+  const text = String(note || "").trim();
+  return text ? { attempted: [`Operador orientou a retomada: ${text}`] } : {};
+}
+
+function recoveryPrompt(job, note) {
+  const text = String(note || "").trim();
+  return [
+    job.goal,
+    text ? `\nOrientacao do operador para retomar apos needs_input: ${text}` : "",
+    "\nUse os artefatos anteriores como contexto, corrija somente o necessario e deixe o resultado para revisao do critic gate."
+  ].filter(Boolean).join("\n");
 }
 
 function renderMissionOverviewCards(job) {
@@ -1175,6 +1405,10 @@ function renderActiveDemandCouncil(job) {
 
   const analystConsent = renderAnalystConsent(job);
   const debateControls = renderDebateControls(job);
+  const councilDecision = renderCouncilDecisionCard();
+  if (councilDecision) {
+    panel.append(councilDecision);
+  }
   if (analystConsent) {
     panel.append(analystConsent);
   }
@@ -1191,6 +1425,124 @@ function renderActiveDemandCouncil(job) {
   }
 
   return panel;
+}
+
+function renderCouncilDecisionCard() {
+  const synthesis = latestDebateSynthesis();
+  if (!synthesis) {
+    return null;
+  }
+
+  const card = document.createElement("section");
+  card.className = "council-decision";
+  const label = document.createElement("strong");
+  label.textContent = "Decisao do Conselho";
+  const recommendation = document.createElement("p");
+  recommendation.textContent = synthesis.recommendation || "Conselho sem recomendacao textual.";
+
+  const facts = document.createElement("dl");
+  facts.className = "council-decision-facts";
+  appendFact(facts, "Confianca", synthesis.confidence || "baixa");
+  appendFact(facts, "Consenso", formatInteger(synthesis.consensus?.length || 0));
+  appendFact(facts, "Riscos", formatInteger(synthesis.risks?.length || 0));
+  appendFact(facts, "Nao verificado", formatInteger(synthesis.unverified?.length || 0));
+  appendFact(facts, "Rodadas", debateRoundLabel(synthesis));
+
+  card.append(label, recommendation, facts);
+  const actions = renderCouncilDecisionActions(synthesis);
+  if (actions) {
+    card.append(actions);
+  }
+  return card;
+}
+
+function debateRoundLabel(synthesis) {
+  const used = synthesis.budget?.roundsUsed || 1;
+  const followUp = synthesis.budget?.followUpRounds || 0;
+  return followUp > 0
+    ? `${used} executada(s), ${followUp} pendente(s)`
+    : `${used} executada(s)`;
+}
+
+function renderCouncilDecisionActions(synthesis) {
+  const job = state.selectedJob;
+  if (!job || job.mode !== "analyze" || !synthesis?.recommendation) {
+    return null;
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "council-decision-actions";
+  const implement = document.createElement("button");
+  implement.type = "button";
+  implement.className = "primary";
+  implement.textContent = "Criar implementacao";
+  implement.addEventListener("click", async () => {
+    await withBusyButton(implement, "Criando", async () => {
+      try {
+        const result = await createImplementationFromCouncil(job, synthesis);
+        state.selectedJobId = result.job.id;
+        state.demandFilter = "all";
+        appendMessage("assistant", `Demanda #${result.job.id} criada a partir da Decisao do Conselho. Ela aguarda confirmacao visual antes de escrever.`);
+        await refreshAll();
+        document.querySelector(".active-demand-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+      } catch (error) {
+        appendMessage("system", `Implementacao nao criada: ${humanizeJobMessage(error.message, error.details)}`);
+      }
+    });
+  });
+  actions.append(implement);
+  return actions;
+}
+
+async function createImplementationFromCouncil(sourceJob, synthesis) {
+  return api("/api/jobs", {
+    method: "POST",
+    body: {
+      goal: implementationGoalFromSynthesis(sourceJob, synthesis),
+      mode: "implement",
+      requestedBy: "text",
+      policyLevel: "write",
+      metadata: {
+        source: "council-decision",
+        sourceJobId: sourceJob.id,
+        plan: synthesis.recommendation,
+        risk: synthesis.risks?.length
+          ? `Riscos levantados pelo Conselho: ${synthesis.risks.map((risk) => risk.text || risk).join(" | ")}`
+          : "Implementacao criada a partir de sintese do Conselho; exige confirmacao visual.",
+        likelyFiles: []
+      }
+    }
+  });
+}
+
+function implementationGoalFromSynthesis(sourceJob, synthesis) {
+  return [
+    `Implementar a Decisao do Conselho da demanda #${sourceJob.id}.`,
+    "",
+    `Objetivo original: ${sourceJob.goal}`,
+    "",
+    `Plano aprovado para revisar: ${synthesis.recommendation}`,
+    "",
+    "Antes de alterar arquivos, mantenha o escopo pequeno e preserve a confirmacao visual do cockpit."
+  ].join("\n");
+}
+
+function latestDebateSynthesis() {
+  const artifact = latestArtifactOfKind("debate-synthesis");
+  if (!artifact?.content) {
+    return null;
+  }
+  try {
+    return JSON.parse(artifact.content);
+  } catch {
+    return null;
+  }
+}
+
+function latestArtifactOfKind(kind) {
+  return [...state.selectedJobArtifacts]
+    .reverse()
+    .find((artifact) => artifact.kind === kind);
 }
 
 function applyJobErrorDetails(error) {
@@ -1223,6 +1575,12 @@ function humanizeJobMessage(value, details = null) {
   if (lower.includes("codex cli was not found") || lower.includes("codex cli unavailable")) {
     return "Codex CLI nao foi encontrado. Instale o Codex CLI ou configure AURA_CODEX_BIN e tente novamente.";
   }
+  if (lower.includes("critic gate requires human review")) {
+    return "A critica local pediu revisao humana antes de concluir. Leia os artefatos, adicione uma orientacao curta e retome se estiver seguro.";
+  }
+  if (lower.includes("critic gate blocked completion")) {
+    return "A critica local bloqueou a conclusao. Corrija o ponto indicado ou retome com uma orientacao mais especifica.";
+  }
   if (lower.includes("job cancelled before execution") || lower.includes("job cancelado")) {
     return "Demanda cancelada antes da execucao. Nenhuma acao local foi realizada.";
   }
@@ -1234,6 +1592,18 @@ function humanizeJobMessage(value, details = null) {
   }
   if (lower.includes("openrouter cli was not found")) {
     return "OpenRouter CLI nao foi encontrado. Instale o OpenRouter CLI ou configure AURA_OPENROUTER_BIN antes de consultar este analista.";
+  }
+  if (lower.includes("nenhum analista utilizavel") || lower.includes("no analyst completed successfully")) {
+    return "Nenhum analista conseguiu responder agora. A demanda ficou aguardando sua decisao: tente novamente depois do health-check ou ignore sem executar nada.";
+  }
+  if (lower.includes("fora do contrato json") || lower.includes("valid json")) {
+    return "O analista respondeu fora do formato esperado pelo Conselho. Tente novamente com um brief menor ou ignore esta rodada.";
+  }
+  if (lower.includes("max turns")) {
+    return "O analista chegou ao limite de turnos antes de concluir. Tente novamente com um brief mais curto.";
+  }
+  if (lower.includes("certificate") || lower.includes("certificado") || lower.includes("cert")) {
+    return "O provedor falhou na verificacao de certificado. Ele foi tratado como indisponivel para esta demanda.";
   }
   if (lower.includes("unavailable") || lower.includes("503")) {
     return "O modelo ou provedor esta temporariamente indisponivel. Aguarde alguns instantes e tente novamente.";
@@ -1313,7 +1683,7 @@ function renderSecurityBand(job) {
   panel.setAttribute("aria-label", "Confirmacao de seguranca da demanda");
 
   const title = document.createElement("strong");
-  title.textContent = "Aguardando aprovacao";
+  title.textContent = job.status === "needs_input" ? "Revisao critica pede decisao" : "Aguardando aprovacao";
 
   const facts = document.createElement("dl");
   facts.className = "security-facts";
@@ -1467,6 +1837,7 @@ function renderJobDetail() {
   const analystConsent = renderAnalystConsent(job);
   const debateControls = renderDebateControls(job);
   const routineDraftControls = renderRoutineDraftControls(job);
+  const recoveryControls = renderRecoveryActions(job);
   const notes = document.createElement("div");
   notes.className = "job-notes";
   if (job.summary) {
@@ -1528,6 +1899,9 @@ function renderJobDetail() {
   if (routineDraftControls) {
     els.jobDetail.append(routineDraftControls);
   }
+  if (recoveryControls) {
+    els.jobDetail.append(recoveryControls);
+  }
   els.jobDetail.append(notes, artifactTitle, artifactList, technicalDetails);
 }
 
@@ -1576,13 +1950,30 @@ function renderAnalystConsent(job) {
 
   const controls = document.createElement("div");
   controls.className = "analyst-controls";
-  const gemini = checkboxControl(`analyst-gemini-${job.id}`, "Gemini", true);
-  const grok = checkboxControl(`analyst-grok-${job.id}`, "Grok", true);
-  const openrouter = checkboxControl(`analyst-openrouter-${job.id}`, "OpenRouter", true);
+  const gemini = analystCheckboxControl(job, "gemini", "Gemini");
+  const grok = analystCheckboxControl(job, "grok", "Grok");
+  const openrouter = analystCheckboxControl(job, "openrouter", "OpenRouter");
+  const rounds = document.createElement("label");
+  rounds.className = "select-control";
+  const roundsText = document.createElement("span");
+  roundsText.textContent = "Rodadas do Conselho";
+  const roundsSelect = document.createElement("select");
+  roundsSelect.setAttribute("aria-label", "Rodadas do Conselho");
+  [
+    ["1", "1 rodada"],
+    ["2", "2 rodadas"],
+    ["3", "3 rodadas"]
+  ].forEach(([value, label]) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    roundsSelect.append(option);
+  });
+  rounds.append(roundsText, roundsSelect);
   const runButton = document.createElement("button");
   runButton.type = "button";
   runButton.className = "primary";
-  runButton.textContent = "Consultar";
+  runButton.textContent = job.status === "needs_input" ? "Tentar novamente" : "Consultar";
   const updateAnalystButton = () => {
     runButton.disabled = !gemini.input.checked && !grok.input.checked && !openrouter.input.checked;
   };
@@ -1599,31 +1990,82 @@ function renderAnalystConsent(job) {
       appendMessage("system", "Selecione ao menos um analista.");
       return;
     }
-    await withBusyButton(runButton, "Consultando", async () => {
-      let result = null;
-      try {
-        result = await api(`/api/jobs/${job.id}/analysts/run`, {
-          method: "POST",
-          body: {
-            consent,
-            context: analystContext(job)
-          }
-        });
-        state.selectedJob = result.job;
-        state.selectedJobEvents = result.events || [];
-        state.selectedJobArtifacts = result.artifacts || [];
-      } catch (error) {
-        appendMessage("system", `Analise nao concluida: ${error.message}`);
-      }
-      await refreshJobs();
-      logEvent("job.analysts", { id: job.id, status: result?.job?.status || "failed", consent });
-    });
+    await withBusyButton(runButton, "Consultando", async () => runAnalystConsultation(job, consent, {}, Number(roundsSelect.value)));
   });
   updateAnalystButton();
 
-  controls.append(gemini.label, grok.label, openrouter.label, runButton);
+  controls.append(gemini.label, grok.label, openrouter.label, rounds, runButton);
   panel.append(preview, controls);
   return panel;
+}
+
+async function runAnalystConsultation(job, consent, extraContext = {}, maxRounds = 1) {
+  let result = null;
+  const safeRounds = Math.max(1, Math.min(3, Number(maxRounds) || 1));
+  try {
+    result = await api(`/api/jobs/${job.id}/analysts/run`, {
+      method: "POST",
+      body: {
+        consent,
+        context: mergeAnalystContext(analystContext(job), extraContext),
+        synthesize: true,
+        budget: {
+          maxRounds: safeRounds,
+          explicitMultiRound: safeRounds > 1
+        }
+      }
+    });
+    state.selectedJob = result.job;
+    state.selectedJobEvents = result.events || [];
+    state.selectedJobArtifacts = result.artifacts || [];
+    if (result.job.status === "needs_input") {
+      appendMessage("system", `Conselho nao conseguiu concluir a demanda #${job.id}. Voce pode tentar novamente ou ignorar.`);
+    } else if (result.debate?.synthesis) {
+      appendMessage("system", `Conselho sintetizou uma decisao para a demanda #${job.id}.`);
+    } else if (result.job.status === "done" && hasAnalystResponseArtifacts(result.artifacts || [])) {
+      const synthesis = await synthesizeCouncilDecision(result.job.id);
+      if (synthesis) {
+        result = synthesis;
+        appendMessage("system", `Conselho sintetizou uma decisao para a demanda #${job.id}.`);
+      }
+    }
+  } catch (error) {
+    applyJobErrorDetails(error);
+    appendMessage("system", `Analise nao concluida: ${humanizeJobMessage(error.message, error.details)}`);
+  }
+  await refreshJobs();
+  logEvent("job.analysts", { id: job.id, status: result?.job?.status || state.selectedJob?.status || "failed", consent });
+}
+
+function mergeAnalystContext(base, extra) {
+  return {
+    ...base,
+    ...extra,
+    constraints: [...(base.constraints || []), ...(extra.constraints || [])],
+    files: [...(base.files || []), ...(extra.files || [])],
+    findings: [...(base.findings || []), ...(extra.findings || [])],
+    attempted: [...(base.attempted || []), ...(extra.attempted || [])],
+    focusTerms: [...(base.focusTerms || []), ...(extra.focusTerms || [])]
+  };
+}
+
+async function synthesizeCouncilDecision(jobId) {
+  try {
+    const result = await api(`/api/jobs/${jobId}/debate/synthesize`, {
+      method: "POST",
+      body: {
+        requested: true,
+        budget: { maxRounds: 1 }
+      }
+    });
+    state.selectedJob = result.job;
+    state.selectedJobEvents = result.events || [];
+    state.selectedJobArtifacts = result.artifacts || [];
+    return result;
+  } catch (error) {
+    appendMessage("system", `Conselho respondeu, mas a sintese nao foi gerada: ${humanizeJobMessage(error.message, error.details)}`);
+    return null;
+  }
 }
 
 function renderDebateControls(job) {
@@ -1644,16 +2086,7 @@ function renderDebateControls(job) {
     await withBusyButton(button, "Sintetizando", async () => {
       let result = null;
       try {
-        result = await api(`/api/jobs/${job.id}/debate/synthesize`, {
-          method: "POST",
-          body: {
-            requested: true,
-            budget: { maxRounds: 1 }
-          }
-        });
-        state.selectedJob = result.job;
-        state.selectedJobEvents = result.events || [];
-        state.selectedJobArtifacts = result.artifacts || [];
+        result = await synthesizeCouncilDecision(job.id);
       } catch (error) {
         appendMessage("system", `Sintese nao concluida: ${error.message}`);
       }
@@ -1754,7 +2187,11 @@ function canSynthesizeDebate(job) {
   if (job.mode !== "analyze" || job.policyLevel !== "read") {
     return false;
   }
-  return state.selectedJobArtifacts.some((artifact) => artifact.kind === "analyst-response");
+  return hasAnalystResponseArtifacts(state.selectedJobArtifacts);
+}
+
+function hasAnalystResponseArtifacts(artifacts) {
+  return Array.isArray(artifacts) && artifacts.some((artifact) => artifact.kind === "analyst-response");
 }
 
 function appendApprovalItem(panel, label, value) {
@@ -1780,34 +2217,60 @@ function checkboxControl(id, text, checked) {
   return { label, input };
 }
 
+function analystCheckboxControl(job, key, labelText) {
+  const provider = state.status?.providers?.[key] || {};
+  const detected = provider.available !== false;
+  const suffix = provider.status === "detected"
+    ? "detectado; verificar antes de enviar"
+    : detected ? "verificar antes de enviar" : "indisponivel";
+  const control = checkboxControl(`analyst-${key}-${job.id}`, `${labelText} (${suffix})`, detected);
+  control.input.disabled = !detected;
+  control.input.title = detected
+    ? "AURA fara um health-check antes de enviar o brief da demanda."
+    : humanizeJobMessage(provider.error || `${labelText} indisponivel.`);
+  return control;
+}
+
+function defaultAnalystConsent() {
+  const providers = state.status?.providers || {};
+  return {
+    gemini: providers.gemini?.available !== false,
+    grok: providers.grok?.available !== false,
+    openrouter: providers.openrouter?.available !== false
+  };
+}
+
 function renderJobArtifact(artifact) {
   const item = document.createElement("li");
   const main = document.createElement("div");
   const label = document.createElement("strong");
   label.textContent = artifact.label;
   const meta = document.createElement("small");
-  meta.textContent = artifact.kind;
+  meta.textContent = labelForArtifactKind(artifact.kind);
   main.append(label, meta);
 
   const preview = document.createElement("pre");
-  preview.textContent = artifact.content || "";
+  preview.textContent = artifactPreview(artifact, 2500);
   item.append(main, preview);
   return item;
 }
 
 function renderArtifactCard(artifact) {
   const card = document.createElement("article");
-  card.className = "artifact-card";
+  const gateClass = artifact.kind === "critic-review" && artifact.metadata?.gate
+    ? ` gate-${artifact.metadata.gate}`
+    : "";
+  card.className = `artifact-card artifact-${artifact.kind}${gateClass}`;
 
   const header = document.createElement("div");
   const title = document.createElement("strong");
   title.textContent = artifact.label;
   const meta = document.createElement("small");
-  meta.textContent = artifact.kind;
+  meta.textContent = labelForArtifactKind(artifact.kind);
   header.append(title, meta);
 
   const preview = document.createElement("p");
-  preview.textContent = artifact.content || "Artefato sem conteudo textual.";
+  preview.textContent = artifactSummary(artifact);
 
   const actions = document.createElement("div");
   actions.className = "artifact-actions";
@@ -1828,7 +2291,7 @@ function renderArtifactCard(artifact) {
   const use = document.createElement("button");
   use.type = "button";
   use.className = "primary";
-  use.textContent = "Usar na conversa";
+  use.textContent = "Usar como contexto";
   use.addEventListener("click", () => {
     els.localInput.value = artifact.content || artifact.label;
     els.localInput.focus();
@@ -1845,6 +2308,75 @@ function renderArtifactCard(artifact) {
   actions.append(details, copy, use);
   card.append(header, preview, actions);
   return card;
+}
+
+function labelForArtifactKind(kind) {
+  const labels = {
+    "evidence-brief": "Brief enviado",
+    "analyst-response": "Resposta do Conselho",
+    "debate-synthesis": "Decisao do Conselho",
+    "codex-log": "Log do Codex",
+    "codex-summary": "Resumo do executor",
+    "diff": "Diff do workspace",
+    "changed-files": "Arquivos alterados",
+    "test-log": "Resultado de testes",
+    "critic-review": "Critica local",
+    "rollback-plan": "Plano de rollback",
+    "independent-critic-brief": "Brief de critica independente",
+    "independent-critic-review": "Critica independente"
+  };
+  return labels[kind] || kind;
+}
+
+function artifactSummary(artifact) {
+  const content = String(artifact.content || "").trim();
+  if (artifact.kind === "changed-files") {
+    const files = content.split(/\r?\n/).filter(Boolean);
+    return files.length ? `${files.length} arquivo(s): ${files.join(", ")}` : "Nenhum arquivo alterado registrado.";
+  }
+  if (artifact.kind === "diff") {
+    const additions = (content.match(/^\+/gm) || []).length;
+    const removals = (content.match(/^-/gm) || []).length;
+    return content ? `Diff capturado com ${additions} adicoes e ${removals} remocoes.` : "Diff vazio.";
+  }
+  if (artifact.kind === "test-log") {
+    const exitCode = artifact.metadata?.exitCode;
+    return exitCode === 0 ? "Testes passaram." : `Testes exigem atencao${exitCode === undefined ? "" : `: exit ${exitCode}`}.`;
+  }
+  if (artifact.kind === "critic-review") {
+    const gate = artifact.metadata?.gate;
+    const labels = {
+      pass: "Gate aprovado",
+      review: "Gate pede revisao",
+      block: "Gate bloqueia confianca"
+    };
+    return `${labels[gate] || "Critica local"}: ${firstUsefulLine(content) || "AURA comparou plano, diff e testes."}`;
+  }
+  if (artifact.kind === "rollback-plan") {
+    return "Plano seguro para revisar, retomar ou reverter somente os arquivos alterados.";
+  }
+  if (artifact.kind === "independent-critic-brief") {
+    return "Brief pronto para uma revisao independente em modo leitura.";
+  }
+  if (artifact.kind === "independent-critic-review") {
+    return firstUsefulLine(content) || "Revisao independente executada em modo leitura.";
+  }
+  return artifactPreview(artifact, 360) || "Artefato sem conteudo textual.";
+}
+
+function artifactPreview(artifact, limit) {
+  const content = String(artifact.content || "").trim();
+  if (!content) {
+    return "";
+  }
+  return content.length > limit ? `${content.slice(0, limit)}...` : content;
+}
+
+function firstUsefulLine(content) {
+  return String(content || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line && !line.startsWith("#") && !line.startsWith("-"));
 }
 
 function renderTools() {
@@ -2256,11 +2788,11 @@ function canCancelJob(job) {
 }
 
 function canConfirmImplementJob(job) {
-  return job.mode === "implement" && job.policyLevel === "write" && job.status === "awaiting_confirm";
+  return job.mode === "implement" && job.policyLevel === "write" && ["awaiting_confirm", "needs_input"].includes(job.status);
 }
 
 function canRunAnalystsJob(job) {
-  return job.mode === "analyze" && job.policyLevel === "read" && ["draft", "queued"].includes(job.status);
+  return job.mode === "analyze" && job.policyLevel === "read" && ["draft", "queued", "needs_input"].includes(job.status);
 }
 
 function analystContext(job) {
@@ -2370,16 +2902,15 @@ function renderRoutine() {
   }
 
   const tasks = state.tasks.filter((task) => task.status !== "done");
+  const suggestion = routineSuggestion(tasks);
   const summary = document.createElement("p");
-  summary.textContent = tasks.length
-    ? `Sugestao do dia baseada nas tarefas abertas: ${tasks.map((task) => task.title).join(" · ")}`
-    : "Rotina ativa. AURA pode sugerir uma demanda para organizar os proximos passos do dia.";
+  summary.textContent = suggestion.summary;
 
   const form = document.createElement("form");
   form.className = "routine-job-form";
   const input = document.createElement("input");
   input.type = "text";
-  input.value = tasks.length ? `Analisar prioridades de hoje: ${tasks.map((task) => task.title).join(", ")}` : "Analisar proximos passos do dia";
+  input.value = suggestion.goal;
   input.setAttribute("aria-label", "Draft sugerido pela rotina");
 
   const mode = document.createElement("select");
@@ -2427,6 +2958,45 @@ function renderRoutine() {
 
   form.append(input, mode, button);
   els.routinePanel.append(summary, form);
+}
+
+function routineSuggestion(tasks) {
+  const needs = state.jobs.filter((job) => ["draft", "awaiting_confirm", "needs_input"].includes(job.status));
+  const failed = state.jobs.filter((job) => ["failed", "cancelled"].includes(job.status));
+  const latestDone = state.jobs.find((job) => job.status === "done");
+
+  if (needs.length) {
+    return {
+      summary: `Sugestao do dia: resolver ${needs.length} demanda(s) aguardando sua decisao antes de iniciar trabalho novo.`,
+      goal: `Revisar e decidir proximos passos das demandas aguardando: ${needs.slice(0, 3).map((job) => `#${job.id}`).join(", ")}`
+    };
+  }
+
+  if (tasks.length) {
+    return {
+      summary: `Sugestao do dia baseada nas tarefas abertas: ${tasks.map((task) => task.title).join(" · ")}`,
+      goal: `Analisar prioridades de hoje: ${tasks.map((task) => task.title).join(", ")}`
+    };
+  }
+
+  if (failed.length) {
+    return {
+      summary: `Sugestao do dia: revisar ${failed.length} demanda(s) com falha ou ignoradas para separar ruído de bloqueador real.`,
+      goal: `Revisar falhas recentes e propor uma proxima acao segura: ${failed.slice(0, 3).map((job) => `#${job.id}`).join(", ")}`
+    };
+  }
+
+  if (latestDone) {
+    return {
+      summary: `Sugestao do dia: continuar a partir da ultima entrega concluida, demanda #${latestDone.id}.`,
+      goal: `Avaliar a continuidade da demanda #${latestDone.id} e propor o proximo passo de maior impacto`
+    };
+  }
+
+  return {
+    summary: "Rotina ativa. AURA pode sugerir uma demanda para organizar os proximos passos do dia.",
+    goal: "Analisar proximos passos do dia"
+  };
 }
 
 async function startScreenCapture() {

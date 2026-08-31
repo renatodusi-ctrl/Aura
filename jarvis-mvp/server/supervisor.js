@@ -4,6 +4,7 @@ import {
   recordJobEvent,
   updateJobStatus
 } from "./memory.js";
+import { filteredToolEnv, killProcessTree, prepareToolSpawn } from "./processTools.js";
 
 const activeProcesses = new Map();
 const OUTPUT_CHUNK_LIMIT = 12000;
@@ -15,7 +16,8 @@ export async function runJobCommand({
   cwd,
   timeoutMs = 300000,
   env = {},
-  input = ""
+  input = "",
+  finalize = true
 }) {
   const job = getJob(jobId);
   if (!job) {
@@ -36,9 +38,12 @@ export async function runJobCommand({
   });
 
   return new Promise((resolve) => {
-    const child = spawn(command, args, {
+    const processEnv = filteredEnv(env);
+    const prepared = prepareToolSpawn(command, args, processEnv);
+    const child = spawn(prepared.command, prepared.args, {
       cwd: workingDirectory,
-      env: filteredEnv(env),
+      env: processEnv,
+      ...prepared.options,
       detached: process.platform !== "win32",
       windowsHide: true
     });
@@ -57,7 +62,7 @@ export async function runJobCommand({
     active.timeout = setTimeout(() => {
       active.timedOut = true;
       recordJobEvent(job.id, "process.timeout", "Process timed out.", { timeoutMs });
-      killChild(child);
+      killProcessTree(child);
     }, timeoutMs);
 
     child.stdout?.on("data", (chunk) => {
@@ -88,23 +93,15 @@ export async function runJobCommand({
       activeProcesses.delete(job.id);
 
       let finalJob;
-      if (active.timedOut) {
-        finalJob = updateJobStatus(job.id, "failed", {
-          error: `Process timed out after ${timeoutMs}ms.`,
-          summary: "Process timed out."
-        });
-      } else if (active.cancelled) {
-        finalJob = updateJobStatus(job.id, "cancelled", {
-          summary: "Process cancelled."
-        });
-      } else if (exitCode === 0) {
-        finalJob = updateJobStatus(job.id, "done", {
-          summary: "Process completed successfully."
-        });
+      if (!finalize) {
+        finalJob = getJob(job.id);
       } else {
-        finalJob = updateJobStatus(job.id, "failed", {
-          error: `Process exited with code ${exitCode ?? "unknown"}${signal ? ` and signal ${signal}` : ""}.`,
-          summary: "Process failed."
+        finalJob = finalizeProcessJob(job.id, {
+          exitCode,
+          signal,
+          timedOut: active.timedOut,
+          cancelled: active.cancelled,
+          timeoutMs
         });
       }
 
@@ -129,6 +126,29 @@ export async function runJobCommand({
   });
 }
 
+function finalizeProcessJob(jobId, { exitCode, signal, timedOut, cancelled, timeoutMs }) {
+  if (timedOut) {
+    return updateJobStatus(jobId, "failed", {
+      error: `Process timed out after ${timeoutMs}ms.`,
+      summary: "Process timed out."
+    });
+  }
+  if (cancelled) {
+    return updateJobStatus(jobId, "cancelled", {
+      summary: "Process cancelled."
+    });
+  }
+  if (exitCode === 0) {
+    return updateJobStatus(jobId, "done", {
+      summary: "Process completed successfully."
+    });
+  }
+  return updateJobStatus(jobId, "failed", {
+    error: `Process exited with code ${exitCode ?? "unknown"}${signal ? ` and signal ${signal}` : ""}.`,
+    summary: "Process failed."
+  });
+}
+
 export function cancelJobProcess(jobId) {
   const active = activeProcesses.get(Number(jobId));
   if (!active) {
@@ -137,7 +157,7 @@ export function cancelJobProcess(jobId) {
 
   active.cancelled = true;
   recordJobEvent(active.jobId, "process.cancel_requested", "Process cancellation requested.", {});
-  killChild(active.child);
+  killProcessTree(active.child);
   return true;
 }
 
@@ -146,29 +166,7 @@ export function hasActiveJobProcess(jobId) {
 }
 
 function filteredEnv(extraEnv = {}) {
-  const allowed = {};
-  for (const name of ["PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP", "SystemRoot", "ComSpec", "PATHEXT"]) {
-    if (process.env[name]) {
-      allowed[name] = process.env[name];
-    }
-  }
-  return { ...allowed, ...extraEnv };
-}
-
-function killChild(child) {
-  if (child.killed) {
-    return;
-  }
-
-  try {
-    if (process.platform === "win32") {
-      child.kill("SIGTERM");
-    } else {
-      process.kill(-child.pid, "SIGTERM");
-    }
-  } catch {
-    child.kill("SIGTERM");
-  }
+  return filteredToolEnv(extraEnv);
 }
 
 function truncateOutput(text) {

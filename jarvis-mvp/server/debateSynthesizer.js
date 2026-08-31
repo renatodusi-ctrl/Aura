@@ -28,6 +28,8 @@ export function synthesizeDebate({ jobId, requested = false, budget = {} }) {
     .filter((artifact) => artifact.kind === "analyst-response")
     .map((artifact) => ({
       source: artifact.metadata?.name || artifact.label,
+      round: Number.parseInt(artifact.metadata?.round, 10) || 1,
+      promptPurpose: artifact.metadata?.promptPurpose || "initial-analysis",
       normalized: artifact.metadata?.normalized || {}
     }));
 
@@ -37,7 +39,8 @@ export function synthesizeDebate({ jobId, requested = false, budget = {} }) {
 
   const synthesis = buildSynthesis(responses, {
     maxRounds,
-    roundsUsed: 1,
+    roundsRequested: maxRounds,
+    roundsUsed: Math.min(maxRoundFromResponses(responses), maxRounds),
     requested
   });
 
@@ -48,6 +51,7 @@ export function synthesizeDebate({ jobId, requested = false, budget = {} }) {
     metadata: {
       roundsUsed: synthesis.budget.roundsUsed,
       maxRounds: synthesis.budget.maxRounds,
+      followUpRounds: synthesis.budget.followUpRounds,
       sources: responses.map((response) => response.source)
     }
   });
@@ -140,6 +144,7 @@ function buildSynthesis(responses, budget) {
     dissent,
     risks,
     unverified,
+    rounds: debateRounds({ responses, consensus, dissent, risks, openQuestions, budget }),
     recommendation: recommendationTexts.length === 1
       ? recommendations[0].text
       : "Review dissent and unverified items before choosing an implementation plan.",
@@ -150,6 +155,62 @@ function buildSynthesis(responses, budget) {
       confirmation: true
     }
   };
+}
+
+function debateRounds({ responses, consensus, dissent, risks, openQuestions, budget }) {
+  const followUpRounds = Math.max(0, budget.maxRounds - budget.roundsUsed);
+  const rounds = [];
+  const groupedRounds = new Map();
+  for (const response of responses) {
+    const round = response.round || 1;
+    if (!groupedRounds.has(round)) {
+      groupedRounds.set(round, []);
+    }
+    groupedRounds.get(round).push(response);
+  }
+
+  for (const [round, entries] of [...groupedRounds.entries()].sort((a, b) => a[0] - b[0])) {
+    rounds.push({
+      round,
+      type: round === 1 ? "initial-analysis" : "dissent-review",
+      status: "executed",
+      sources: [...new Set(entries.map((response) => response.source))],
+      responseCount: entries.length,
+      promptPurpose: entries[0]?.promptPurpose || (round === 1 ? "initial-analysis" : "dissent-review")
+    });
+  }
+
+  if (followUpRounds > 0) {
+    rounds.push({
+      round: budget.roundsUsed + 1,
+      type: "planned-dissent-review",
+      status: "not_executed",
+      reason: "External analysts are not re-prompted automatically in this MVP.",
+      prompts: followUpPrompts({ dissent, risks, openQuestions })
+    });
+  }
+
+  budget.followUpRounds = followUpRounds;
+  budget.roundsPlanned = rounds.length;
+  return rounds;
+}
+
+function maxRoundFromResponses(responses) {
+  return Math.max(1, ...responses.map((response) => response.round || 1));
+}
+
+function followUpPrompts({ dissent, risks, openQuestions }) {
+  const prompts = [];
+  if (dissent.length) {
+    prompts.push("Compare the dissenting recommendations and identify the smallest safe implementation plan.");
+  }
+  if (risks.length) {
+    prompts.push("Challenge the highest-risk assumptions and name the evidence needed before implementation.");
+  }
+  if (openQuestions.length) {
+    prompts.push("Answer or prioritize the open questions that block a confident decision.");
+  }
+  return prompts.length ? prompts : ["Confirm whether the current recommendation is still the safest action."];
 }
 
 function unionWithSources(responses, field) {

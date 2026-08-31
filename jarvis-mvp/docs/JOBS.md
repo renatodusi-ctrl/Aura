@@ -68,11 +68,13 @@ The job API is orchestration-only. It does not execute external CLIs.
 
 | Route | Purpose |
 | --- | --- |
+| `GET /api/now` | Return the current speakable/visible state: active job, next step, blockers, Conselho decision, realtime state and CTA. |
 | `GET /api/jobs?limit=50` | List recent jobs. |
 | `POST /api/jobs` | Create a draft job. |
 | `GET /api/jobs/:id` | Read one job with its events and artifacts. |
 | `GET /api/jobs/:id/events` | Read a job timeline. |
 | `POST /api/jobs/:id/cancel` | Cancel a non-terminal job. |
+| `POST /api/jobs/:id/skip` | Mark a recoverable draft, confirmation or input-needed job as intentionally ignored. |
 | `PATCH /api/jobs/:id` | Edit a draft job. |
 | `POST /api/jobs/:id/approve` | Approve a draft into `queued` without execution. |
 | `POST /api/routine/jobs` | Create a routine-owned `ask` or `analyze` draft. |
@@ -82,16 +84,22 @@ The job API is orchestration-only. It does not execute external CLIs.
 
 When a `write` or `git` job already exists in a non-terminal state for a workspace, creating another `write` or `git` job in that same workspace returns `409` with a `lockedBy` summary.
 
-Process execution is owned by `server/supervisor.js`. The supervisor records process start, stdout, stderr, timeout, cancellation and finish events on the parent job.
+Process execution is owned by `server/supervisor.js`. The supervisor records process start, stdout, stderr, timeout, cancellation and finish events on the parent job. Process cancellation uses a child-process-tree kill so wrapper CLIs do not leave a hidden process running.
 
 Codex execution is owned by `server/codexAdapter.js`.
 
 - `ask` accepts `mode=ask` and `policy_level=read`, runs `codex exec` with `--sandbox read-only`, and records detection, stdout, stderr, exit status and final message on the job timeline.
-- `implement` accepts only `mode=implement`, `policy_level=write`, `status=awaiting_confirm` and an explicit confirmation payload. It runs `codex exec` with `--sandbox workspace-write`, blocks push/reset/destructive intent, and persists diff, changed files, Codex logs, final message and optional test logs as artifacts.
+- `implement` accepts only `mode=implement`, `policy_level=write`, `status=awaiting_confirm` or recoverable `needs_input`, plus an explicit confirmation payload. It runs `codex exec` with `--sandbox workspace-write`, blocks push/reset/destructive intent, and persists diff, changed files, Codex logs, final message, local critic-review and optional test logs as artifacts. A critic gate of `review` or `block` pauses the job in `needs_input` for a human decision and adds `rollback-plan`, `independent-critic-brief` and `independent-critic-review` artifacts.
 
-Gemini and Grok analyst execution is owned by `server/analystAdapter.js`. It accepts only `mode=analyze` and `policy_level=read` jobs, requires destination consent, sends the same evidence brief to each selected analyst in plan/read-only mode, and normalizes responses into `findings`, `risks`, `open_questions`, `recommendation` and `confidence`.
+Gemini, Grok and OpenRouter analyst execution is owned by `server/analystAdapter.js`. It accepts only `mode=analyze` and `policy_level=read` jobs, requires destination consent, sends the same evidence brief to each selected analyst through that CLI's safe read-only/headless path, and normalizes responses into `findings`, `risks`, `open_questions`, `recommendation` and `confidence`.
 
-Debate synthesis is owned by `server/debateSynthesizer.js`. It reads normalized analyst artifacts, separates consensus from dissent and unverified items, caps rounds by budget, requires explicit request or policy allowance, and marks later implementation as requiring a short plan plus confirmation.
+Analyst detection is a preflight signal, not a promise that the provider can complete the next request. Before dispatching the evidence brief, AURA runs a short JSON health-check per selected analyst. Providers that are missing, unreachable, blocked by network/certificate issues, or outside the response contract are skipped with timeline evidence and temporarily isolated by an in-memory circuit breaker. If every selected analyst is unusable or fails schema validation, the job moves to `needs_input` instead of `failed` so the operator can retry or skip the consultation. `POST /api/jobs/:id/cancel` also cancels active analyst processes, not only Codex supervisor jobs.
+
+Debate synthesis is owned by `server/debateSynthesizer.js`. It reads normalized analyst artifacts, separates consensus from dissent and unverified items, caps rounds by budget, requires explicit request or policy allowance, and marks later implementation as requiring a short plan plus confirmation. When `analysts/run` is called with a budget above one round and `explicitMultiRound=true`, usable analysts are re-prompted in read-only dissent-review rounds before synthesis. Calls that request extra rounds without explicit operator intent are capped to one round by progressive-round policy. The cockpit can request synthesis immediately after a successful Conselho run, shows the latest synthesis as `Decisao do Conselho`, and can turn that recommendation into a separate `implement` demand that still waits for visual confirmation.
+
+Recoverable `needs_input` jobs are operator loops, not terminal failures. Analyze jobs can be retried with a short recovery note that is added to the next evidence brief. Implement jobs can be resumed with a short operator note and explicit confirmation, then re-enter the Codex plus critic-review flow.
+
+Local chat can answer continuity prompts such as "o que esta acontecendo agora?" or "o que esta em andamento?" using the same `/api/now` snapshot that feeds the cockpit HUD. It can also prepare read-only Conselho recovery by voice/text, but write recovery still requires cockpit confirmation.
 
 Routine draft suggestions are owned by `/api/routine/jobs`. They can create only `ask` or `analyze` jobs with `requested_by=routine`, `policy_level=read` and `status=draft`. Users can edit, approve into `queued`, or discard these drafts. Routine never starts implementation.
 

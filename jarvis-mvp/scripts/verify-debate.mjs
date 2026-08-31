@@ -38,6 +38,9 @@ try {
   assert.equal(output.job.status, "draft");
   assert.equal(output.synthesis.budget.maxRounds, 3);
   assert.equal(output.synthesis.budget.roundsUsed, 1);
+  assert.equal(output.synthesis.budget.followUpRounds, 2);
+  assert.ok(output.synthesis.rounds.some((round) => round.type === "planned-dissent-review"));
+  assert.ok(output.synthesis.rounds.some((round) => round.status === "not_executed"));
   assert.ok(output.synthesis.consensus.some((item) => item.text === "Use a shared brief."));
   assert.ok(output.synthesis.dissent.length >= 2);
   assert.ok(output.synthesis.risks.some((item) => item.text === "Brief may omit evidence."));
@@ -56,6 +59,34 @@ try {
 
   const explicit = synthesizeDebate({ jobId: job.id, requested: true, budget: { maxRounds: 1 } });
   assert.equal(explicit.synthesis.budget.maxRounds, 1);
+
+  const roundJob = createJob({
+    goal: "Verify executed debate round",
+    workspace: process.cwd(),
+    mode: "analyze",
+    policyLevel: "read",
+    timeoutMs: 1000,
+    metadata: { debateAllowed: true }
+  });
+  jobIds.push(roundJob.id);
+  createAnalystArtifact(roundJob.id, "gemini", {
+    findings: ["Round one finding"],
+    risks: [],
+    open_questions: [],
+    recommendation: "Initial plan.",
+    confidence: "medium"
+  }, 1);
+  createAnalystArtifact(roundJob.id, "gemini", {
+    findings: ["Round two critique"],
+    risks: ["Second round risk"],
+    open_questions: [],
+    recommendation: "Refined plan.",
+    confidence: "medium"
+  }, 2);
+  const roundOutput = synthesizeDebate({ jobId: roundJob.id, budget: { maxRounds: 3 } });
+  assert.equal(roundOutput.synthesis.budget.roundsUsed, 2);
+  assert.equal(roundOutput.synthesis.budget.followUpRounds, 1);
+  assert.ok(roundOutput.synthesis.rounds.some((round) => round.type === "dissent-review" && round.status === "executed"));
 
   const blocked = createJob({
     goal: "Verify debate request gate",
@@ -87,11 +118,11 @@ try {
   cleanup.close();
 }
 
-function createAnalystArtifact(jobId, name, normalized) {
+function createAnalystArtifact(jobId, name, normalized, round = 1) {
   return createJobArtifact(jobId, {
     kind: "analyst-response",
     label: `${name} response`,
     content: JSON.stringify(normalized),
-    metadata: { name, normalized }
+    metadata: { name, normalized, round, promptPurpose: round === 1 ? "initial-analysis" : "dissent-review" }
   });
 }

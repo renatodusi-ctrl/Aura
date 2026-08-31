@@ -3,7 +3,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { config, ensureRuntime, ROOT_DIR } from "./config.js";
 import {
@@ -31,10 +31,11 @@ import { evaluateJobPolicy, normalizePolicyLevel, POLICY_LEVELS } from "./policy
 import { createSessionToken, isAllowedOrigin, isProtectedApiPath, validateSessionRequest } from "./httpSecurity.js";
 import { cancelJobProcess } from "./supervisor.js";
 import { detectCodex, runCodexAsk, runCodexImplement } from "./codexAdapter.js";
-import { buildEvidenceBrief, runAnalysts } from "./analystAdapter.js";
+import { analystCircuitState, buildEvidenceBrief, cancelAnalystJobProcess, runAnalysts } from "./analystAdapter.js";
 import { synthesizeDebate } from "./debateSynthesizer.js";
 import { handleVoiceIntent } from "./voiceIntents.js";
 import { redactText } from "./redaction.js";
+import { filteredToolEnv, killProcessTree, prepareToolSpawn, spawnToolSync } from "./processTools.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -117,6 +118,10 @@ async function route(req, res) {
     return sendJson(res, 200, getLocalContext());
   }
 
+  if (url.pathname === "/api/now" && method === "GET") {
+    return sendJson(res, 200, { now: buildNowSnapshot() });
+  }
+
   if (url.pathname === "/api/jobs" && method === "GET") {
     return sendJson(res, 200, { jobs: listJobs(limitFromQuery(url, 50)) });
   }
@@ -152,6 +157,10 @@ async function route(req, res) {
 
   if (jobRoute && method === "POST" && jobRoute.action === "cancel") {
     return cancelJobRoute(jobRoute.id, res);
+  }
+
+  if (jobRoute && method === "POST" && jobRoute.action === "skip") {
+    return skipJobRoute(jobRoute.id, res);
   }
 
   if (jobRoute && method === "POST" && jobRoute.action === "approve") {
@@ -602,7 +611,7 @@ function keyStatus(provider, envName, configured, source) {
 function openRouterCostKeyStatus() {
   const envName = configuredEnvName(["OPENROUTER_API_KEY", "OPENROUTE_API_KEY"]);
   const hasEnvKey = Boolean(process.env.OPENROUTER_API_KEY || process.env.OPENROUTE_API_KEY);
-  const hasCli = commandAvailable(process.env.AURA_OPENROUTER_BIN || "openrouter", ["-v"]);
+  const hasCli = commandAvailable(process.env.AURA_OPENROUTER_BIN || "openrouter", ["--version"]);
   return {
     provider: "OpenRouter",
     envName,
@@ -613,7 +622,7 @@ function openRouterCostKeyStatus() {
 }
 
 function commandAvailable(command, args = []) {
-  const result = spawnSync(command, args, {
+  const result = spawnToolSync(command, args, {
     encoding: "utf8",
     stdio: "ignore",
     timeout: 1800,
@@ -763,12 +772,35 @@ function cancelJobRoute(id, res) {
       return sendJson(res, 202, { job: getJob(job.id), cancellation: "requested", events: listJobEvents(job.id) });
     }
 
+    if (cancelAnalystJobProcess(job.id)) {
+      return sendJson(res, 202, { job: getJob(job.id), cancellation: "requested", events: listJobEvents(job.id) });
+    }
+
     const cancelled = updateJobStatus(job.id, "cancelled", {
       summary: "Job cancelled before execution."
     });
     return sendJson(res, 200, { job: cancelled, events: listJobEvents(job.id) });
   } catch (error) {
     return sendJson(res, 409, { error: error.message || "Could not cancel job." });
+  }
+}
+
+function skipJobRoute(id, res) {
+  try {
+    const job = getJob(id);
+    if (!job) {
+      return sendJson(res, 404, { error: "Job not found." });
+    }
+    if (job.status !== "needs_input" && job.status !== "draft" && job.status !== "awaiting_confirm") {
+      throw httpError(409, "Only demands waiting for a decision can be skipped.");
+    }
+
+    const skipped = updateJobStatus(job.id, "cancelled", {
+      summary: "Demanda ignorada por decisao do usuario. Nenhuma acao foi executada."
+    });
+    return sendJson(res, 200, { job: skipped, events: listJobEvents(job.id), artifacts: listJobArtifacts(job.id) });
+  } catch (error) {
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not skip job."));
   }
 }
 
@@ -820,17 +852,42 @@ async function analystPreviewRoute(id, req, res) {
 async function analystsRunRoute(id, req, res) {
   try {
     const body = await readJson(req);
+    const budget = normalizeAnalystBudget(body.budget || {}, { synthesize: body.synthesize === true });
     const output = await runAnalysts({
       jobId: id,
       context: body.context || {},
       consent: body.consent || {},
       bins: body.bins || {},
-      timeoutMs: body.timeoutMs
+      timeoutMs: body.timeoutMs,
+      debateRounds: budget.maxRounds
     });
+    if (body.synthesize === true && output.job.status === "done") {
+      output.debate = synthesizeDebate({
+        jobId: id,
+        requested: true,
+        budget
+      });
+      output.job = output.debate.job;
+      output.artifacts = output.debate.artifacts;
+      output.events = output.debate.events;
+    }
     return sendJson(res, output.job.status === "failed" ? 503 : 200, responseForCommandOutput(output));
   } catch (error) {
     return sendJson(res, 400, { error: error.message || "Could not run analysts." });
   }
+}
+
+function normalizeAnalystBudget(budget = {}, { synthesize = false } = {}) {
+  const requestedRounds = Math.max(1, Math.min(Number.parseInt(budget.maxRounds, 10) || 1, 3));
+  const explicitMultiRound = budget.explicitMultiRound === true || budget.operatorRequested === true;
+  const maxRounds = synthesize && (requestedRounds === 1 || explicitMultiRound) ? requestedRounds : 1;
+  return {
+    ...budget,
+    maxRounds,
+    requestedMaxRounds: requestedRounds,
+    explicitMultiRound,
+    cappedByProgressivePolicy: requestedRounds > maxRounds
+  };
 }
 
 function responseForCommandOutput(output) {
@@ -906,7 +963,7 @@ function policyLevelForJobMode(mode, policyLevel) {
 }
 
 function matchJobRoute(pathname) {
-  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|approve|codex\/ask|codex\/implement|analysts\/preview|analysts\/run|debate\/synthesize))?$/);
+  const match = pathname.match(/^\/api\/jobs\/(\d+)(?:\/(events|cancel|skip|approve|codex\/ask|codex\/implement|analysts\/preview|analysts\/run|debate\/synthesize))?$/);
   if (!match) {
     return null;
   }
@@ -961,6 +1018,176 @@ function bodyForJobError(error, fallback) {
   return body;
 }
 
+function buildNowSnapshot() {
+  const jobs = listJobs(20);
+  const tasks = listTasks(false);
+  const activeJob = preferredNowJob(jobs);
+  const decision = activeJob ? latestDebateSynthesisForJob(activeJob.id) : latestDebateSynthesisAcross(jobs);
+  const realtime = voiceStatus();
+  const blockers = nowBlockers(activeJob, decision);
+  const nextStep = activeJob
+    ? nextStepForJob(activeJob, decision)
+    : tasks.length
+      ? `Escolha uma das ${tasks.length} tarefas abertas e defina Codex, Conselho ou Codex + Conselho.`
+      : "Diga ou escreva uma missao para AURA organizar o trabalho.";
+
+  return {
+    generatedAt: new Date().toISOString(),
+    headline: activeJob ? `Demanda #${activeJob.id}: ${labelForJobStatus(activeJob.status)}` : "Nenhuma demanda ativa",
+    nextStep,
+    blockers,
+    cta: ctaForJob(activeJob),
+    realtime: {
+      enabled: realtime.enabled,
+      provider: realtime.provider,
+      model: realtime.model,
+      voice: realtime.voice,
+      label: realtime.enabled ? "Voz realtime pronta" : "Voz local em fallback",
+      detail: realtime.enabled ? `${realtime.model} · voz ${realtime.voice}` : "Configure a chave do provider para conversa ao vivo."
+    },
+    activeJob: activeJob ? summarizeJob(activeJob) : null,
+    councilDecision: decision ? summarizeDebateSynthesis(decision) : null,
+    counts: {
+      openTasks: tasks.length,
+      waitingJobs: jobs.filter((job) => ["draft", "awaiting_confirm", "needs_input"].includes(job.status)).length,
+      runningJobs: jobs.filter((job) => ["queued", "running"].includes(job.status)).length,
+      doneJobs: jobs.filter((job) => job.status === "done").length
+    }
+  };
+}
+
+function preferredNowJob(jobs) {
+  const priorityGroups = [
+    ["needs_input", "awaiting_confirm"],
+    ["running", "queued"],
+    ["draft"],
+    ["done"],
+    ["failed"],
+    ["cancelled"]
+  ];
+  for (const statuses of priorityGroups) {
+    const match = jobs.find((job) => statuses.includes(job.status));
+    if (match) {
+      return match;
+    }
+  }
+  return jobs[0] || null;
+}
+
+function latestDebateSynthesisAcross(jobs) {
+  for (const job of jobs) {
+    const synthesis = latestDebateSynthesisForJob(job.id);
+    if (synthesis) {
+      return synthesis;
+    }
+  }
+  return null;
+}
+
+function latestDebateSynthesisForJob(jobId) {
+  const artifact = [...listJobArtifacts(jobId)].reverse().find((item) => item.kind === "debate-synthesis");
+  if (!artifact) {
+    return null;
+  }
+  try {
+    return JSON.parse(artifact.content);
+  } catch {
+    return null;
+  }
+}
+
+function summarizeDebateSynthesis(synthesis) {
+  return {
+    recommendation: synthesis.recommendation || "Conselho sem recomendacao textual.",
+    confidence: synthesis.confidence || "low",
+    consensusCount: Array.isArray(synthesis.consensus) ? synthesis.consensus.length : 0,
+    dissentCount: Array.isArray(synthesis.dissent) ? synthesis.dissent.length : 0,
+    riskCount: Array.isArray(synthesis.risks) ? synthesis.risks.length : 0,
+    unverifiedCount: Array.isArray(synthesis.unverified) ? synthesis.unverified.length : 0,
+    roundsUsed: synthesis.budget?.roundsUsed || 1
+  };
+}
+
+function summarizeJob(job) {
+  return {
+    id: job.id,
+    goal: job.goal,
+    mode: job.mode,
+    status: job.status,
+    policyLevel: job.policyLevel,
+    summary: job.summary,
+    error: job.error,
+    updatedAt: job.updatedAt
+  };
+}
+
+function nowBlockers(job, decision) {
+  const blockers = [];
+  if (!voiceStatus().enabled) {
+    blockers.push("Voz realtime ainda esta em fallback local.");
+  }
+  if (job?.status === "needs_input") {
+    blockers.push(job.error || job.summary || "AURA precisa de uma decisao do operador.");
+  }
+  if (job?.status === "failed") {
+    blockers.push(job.error || "A ultima demanda falhou e precisa de revisao.");
+  }
+  const risks = Array.isArray(decision?.risks) ? decision.risks : [];
+  blockers.push(...risks.slice(0, 2).map((risk) => risk.text || String(risk)));
+  return blockers.slice(0, 4);
+}
+
+function nextStepForJob(job, decision = null) {
+  if (!job) {
+    return "Diga ou escreva uma missao para AURA organizar o trabalho.";
+  }
+  if (job.status === "done" && decision?.recommendation) {
+    return "Revisar a Decisao do Conselho e criar uma implementacao confirmavel se fizer sentido.";
+  }
+  const steps = {
+    draft: "Revisar a demanda e aprovar quando estiver pronta.",
+    awaiting_confirm: "Aguardando sua confirmacao visual para continuar.",
+    queued: "AURA colocou a demanda na fila de execucao.",
+    running: "AURA esta trabalhando nesta demanda agora.",
+    needs_input: "AURA precisa de uma resposta sua para prosseguir.",
+    done: "Resultado disponivel no historico da demanda.",
+    failed: "Verificar erro e decidir se a demanda deve ser reaberta ou ajustada.",
+    cancelled: "Demanda cancelada; nenhuma execucao pendente."
+  };
+  return steps[job.status] || "Acompanhar o andamento no historico.";
+}
+
+function ctaForJob(job) {
+  if (!job) {
+    return { kind: "compose", label: "Criar missao", enabled: true };
+  }
+  const ctas = {
+    draft: { kind: "approve", label: "Aprovar draft", enabled: true },
+    awaiting_confirm: { kind: "confirm", label: "Confirmar execucao", enabled: true },
+    queued: { kind: "cancel", label: "Cancelar", enabled: true },
+    running: { kind: "cancel", label: "Cancelar", enabled: true },
+    needs_input: { kind: "recover", label: "Retomar ou ignorar", enabled: true },
+    done: { kind: "review", label: "Ver resultado", enabled: true },
+    failed: { kind: "review", label: "Revisar falha", enabled: true },
+    cancelled: { kind: "none", label: "Nada pendente", enabled: false }
+  };
+  return ctas[job.status] || { kind: "review", label: "Ver demanda", enabled: true };
+}
+
+function labelForJobStatus(status) {
+  const labels = {
+    draft: "draft",
+    awaiting_confirm: "aguardando confirmacao",
+    queued: "na fila",
+    running: "em execucao",
+    needs_input: "aguardando voce",
+    done: "concluida",
+    failed: "falhou",
+    cancelled: "cancelada"
+  };
+  return labels[status] || status;
+}
+
 function localChat(body) {
   const text = String(body.text || "").trim();
   const lower = text.toLowerCase();
@@ -998,6 +1225,10 @@ function localChat(body) {
     return voiceIntent;
   }
 
+  if (/\b(?:agora|andamento|pendente|pendencias|pendências|o que estamos fazendo|o que esta acontecendo|o que está acontecendo|em aberto|fila)\b/i.test(text)) {
+    return localWorkContinuity();
+  }
+
   if (lower.includes("rotina") || lower.includes("bom dia")) {
     const tasks = listTasks(false);
     const openList = tasks.length ? tasks.map((task) => `- ${task.title}`).join("\n") : "Nenhuma tarefa aberta.";
@@ -1013,6 +1244,32 @@ function localChat(body) {
 
   return {
     reply: "Estou em modo local. Posso guardar memorias com \"guardar ...\", criar tasks com \"crie uma task para a plataforma ...\", desenvolver uma task com \"desenvolva a task 4\", criar demandas com \"criar demanda ...\", consultar com \"status da demanda 1\" e cancelar com \"cancelar demanda 1\"."
+  };
+}
+
+function localWorkContinuity() {
+  const now = buildNowSnapshot();
+  const jobs = listJobs(8);
+  const active = jobs.filter((job) => ["draft", "awaiting_confirm", "queued", "running", "needs_input"].includes(job.status));
+  if (!active.length) {
+    const latest = jobs[0];
+    return {
+      reply: latest
+        ? `Agora: ${now.nextStep} Ultima demanda: ${latest.id}, ${latest.status}, ${latest.summary || latest.goal}`
+        : `Agora: ${now.nextStep}`,
+      now,
+      jobs
+    };
+  }
+
+  return {
+    reply: [
+      `Agora: ${now.nextStep}`,
+      `Temos ${active.length} demanda(s) em aberto:`,
+      ...active.map((job) => `- ${job.id}: ${job.status}, ${job.mode}. ${job.summary || job.goal}`)
+    ].join("\n"),
+    now,
+    jobs: active
   };
 }
 
@@ -1556,39 +1813,69 @@ async function getProviderPreflight() {
     gemini: {
       name: "gemini",
       label: "Gemini",
+      role: "analyst",
       bin: process.env.AURA_GEMINI_BIN || "gemini",
       args: ["--version"]
     },
     grok: {
       name: "grok",
       label: "Grok",
+      role: "analyst",
       bin: process.env.AURA_GROK_BIN || "grok",
       args: ["--version"]
     },
     openrouter: {
       name: "openrouter",
       label: "OpenRouter",
+      role: "analyst",
       bin: process.env.AURA_OPENROUTER_BIN || "openrouter",
-      args: ["-v"]
+      args: ["--version"]
     },
     codex: {
       name: "codex",
       label: "Codex",
+      role: "executor",
       bin: process.env.AURA_CODEX_BIN || "codex",
       args: ["--version"]
     }
   };
 
   const entries = await Promise.all(Object.entries(providers).map(async ([key, provider]) => {
-    const probe = await runProviderProbe(provider.bin, provider.args, 1800);
+    const isAnalyst = provider.role === "analyst";
+    const circuit = isAnalyst ? analystCircuitState(key) : { open: false };
+    if (circuit.open) {
+      return [key, {
+        name: provider.name,
+        label: provider.label,
+        role: provider.role,
+        status: "circuit_open",
+        detected: true,
+        available: false,
+        usable: false,
+        dispatchable: false,
+        bin: provider.bin,
+        version: null,
+        error: circuit.reason,
+        note: `Circuit breaker ativo ate ${circuit.retryAt}.`,
+        circuit
+      }];
+    }
+
+    const probe = await runProviderProbe(provider.bin, provider.args, 5000);
     return [key, {
       name: provider.name,
       label: provider.label,
-      status: probe.available ? "available" : "unavailable",
+      role: provider.role,
+      status: probe.available ? (isAnalyst ? "detected" : "available") : "unavailable",
+      detected: probe.available,
       available: probe.available,
+      usable: isAnalyst ? null : probe.available,
+      dispatchable: isAnalyst ? "health_check_required" : probe.available,
       bin: provider.bin,
       version: probe.version,
-      error: probe.error
+      error: probe.error,
+      note: probe.available && isAnalyst ? "Verificacao real acontece antes de enviar a demanda." : null,
+      circuit
     }];
   }));
 
@@ -1612,7 +1899,7 @@ function runProviderProbe(command, args, timeoutMs) {
     };
 
     const timeout = setTimeout(() => {
-      child?.kill("SIGTERM");
+      killProcessTree(child);
       finish({
         available: false,
         version: null,
@@ -1621,8 +1908,11 @@ function runProviderProbe(command, args, timeoutMs) {
     }, timeoutMs);
 
     try {
-      child = spawn(command, args, {
-        env: filteredProviderEnv(),
+      const env = filteredProviderEnv();
+      const prepared = prepareToolSpawn(command, args, env);
+      child = spawn(prepared.command, prepared.args, {
+        env,
+        ...prepared.options,
         windowsHide: true
       });
     } catch (error) {
@@ -1667,13 +1957,7 @@ function runProviderProbe(command, args, timeoutMs) {
 }
 
 function filteredProviderEnv() {
-  const env = {};
-  for (const name of ["PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP", "SystemRoot", "ComSpec", "PATHEXT"]) {
-    if (process.env[name]) {
-      env[name] = process.env[name];
-    }
-  }
-  return env;
+  return filteredToolEnv();
 }
 
 async function readJson(req) {

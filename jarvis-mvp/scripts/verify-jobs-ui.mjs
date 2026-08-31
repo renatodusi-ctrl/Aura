@@ -6,13 +6,14 @@ const root = path.resolve(import.meta.dirname, "..");
 const html = fs.readFileSync(path.join(root, "index.html"), "utf8");
 const app = fs.readFileSync(path.join(root, "app.js"), "utf8");
 
-for (const id of ["job-list", "job-detail", "jobs-refresh-button"]) {
+for (const id of ["now-hud", "job-list", "job-detail", "jobs-refresh-button"]) {
   assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
   assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
 }
 
 for (const pattern of [
   /api\("\/api\/jobs\?limit=20"\)/,
+  /api\("\/api\/now"\)/,
   /api\(`\/api\/jobs\/\$\{state\.selectedJobId\}`\)/,
   /api\(`\/api\/jobs\/\$\{job\.id\}\/cancel`/
 ]) {
@@ -25,23 +26,48 @@ for (const token of [
   "policyLevel",
   "selectedJobEvents",
   "selectedJobArtifacts",
+  "renderNowHud",
+  "nowHudFact",
+  "runNowAction",
   "canCancelJob",
   "canConfirmImplementJob",
   "codex/implement",
   "renderJobArtifact",
+  "renderArtifactCard",
+  "labelForArtifactKind",
+  "critic-review",
+  "rollback-plan",
+  "independent-critic-brief",
+  "independent-critic-review",
+  "preferredMissionJob",
   "renderImplementationApproval",
   "analysts/run",
   "renderAnalystConsent",
   "buildAnalystPreview",
+  "Rodadas do Conselho",
+  "safeRounds",
+  "maxRounds: safeRounds",
+  "explicitMultiRound",
   "Gemini",
   "Grok",
   "debate/synthesize",
+  "synthesizeCouncilDecision",
+  "renderCouncilDecisionCard",
+  "renderCouncilDecisionActions",
+  "debateRoundLabel",
+  "createImplementationFromCouncil",
+  "Criar implementacao",
+  "Decisao do Conselho",
   "renderDebateControls",
   "canSynthesizeDebate",
+  "recoveryContext",
+  "Retomar conselho",
+  "Retomar execucao",
   "Sintetizar",
   "/api/routine/jobs",
   "renderRoutineDraftControls",
   "routine.job.created",
+  "routineSuggestion",
   "Aprovar",
   "Descartar"
 ]) {

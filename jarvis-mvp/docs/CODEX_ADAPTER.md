@@ -58,5 +58,13 @@ Confirmed implement jobs persist artifacts for cockpit review:
 - `git diff --`.
 - `git diff --name-only --` as changed files.
 - Optional test log. If no `testCommand` is supplied and the workspace has `package.json`, AURA runs `npm run verify`.
+- Local `critic-review` with a quality gate:
+  - `pass` keeps the implementation `done`.
+  - `review` moves the implementation to `needs_input` for a human decision when confidence is limited, such as missing tests or no diff content.
+  - `block` moves the implementation to `needs_input` when Codex exits non-zero or automated verification fails.
+- When the gate pauses in `needs_input`, AURA also persists:
+  - `rollback-plan`: operator-safe instructions for reviewing, resuming or reverting only listed files.
+  - `independent-critic-brief`: a read-only review brief that can be handed to Codex ask or an external analyst.
+  - `independent-critic-review`: an attempted Codex read-only review of that brief, captured as an artifact without granting write access.
 
 The adapter rejects implement requests that include blocked destructive intent such as `git push`, `git reset`, recursive destructive removal, or Windows recursive delete commands. It does not create commits or push changes.

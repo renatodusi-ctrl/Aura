@@ -171,7 +171,7 @@ Initial commands:
 
 - Codex: `codex exec --cd <workspace> --sandbox read-only ...` for `ask`;
 - Gemini: `gemini -p <prompt> --approval-mode plan ...` for read-only analysis;
-- Grok: `grok -p <prompt> --permission-mode plan ...` for read-only analysis.
+- Grok: `grok -p <prompt> --no-plan --json-schema <schema> ...` for read-only analysis.
 
 The exact command line should be owned by the adapter and covered by smoke tests.
 
@@ -291,7 +291,7 @@ The next sprint is accepted when:
 - a job can be cancelled;
 - two writer jobs cannot run in the same workspace;
 - any write mode stops at `awaiting_confirm`;
-- missing CLI creates a clear `failed` job;
+- missing or unusable analyst CLI creates a clear `needs_input` job with retry/skip recovery actions;
 - timeout kills the process and releases the lock;
 - local API rejects unexpected origins;
 - the cockpit clearly shows whether a job may write files or send context to a cloud CLI.

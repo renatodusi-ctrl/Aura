@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { config } from "../server/config.js";
 import { createJob, initMemory, updateJobStatus } from "../server/memory.js";
@@ -13,6 +15,7 @@ const host = "127.0.0.1";
 const port = await freePort();
 const base = `http://${host}:${port}`;
 const jobIds = [];
+const tempDirs = [];
 let serverProcess;
 
 initMemory();
@@ -46,6 +49,11 @@ try {
     "Content-Type": "application/json",
     "X-AURA-Session": token
   };
+
+  const now = await request("/api/now", { headers });
+  assert.equal(now.status, 200);
+  assert.ok(now.data.now.nextStep);
+  assert.ok(now.data.now.realtime);
 
   const created = await request("/api/jobs", {
     method: "POST",
@@ -103,6 +111,58 @@ try {
   assert.equal(cancelledDetail.status, 200);
   assert.equal(cancelledDetail.data.job.status, "cancelled");
 
+  const skippable = createJob({
+    goal: "Smoke skip needs_input job",
+    workspace: root,
+    mode: "analyze",
+    policyLevel: "read",
+    timeoutMs: 1000
+  });
+  jobIds.push(skippable.id);
+  updateJobStatus(skippable.id, "running", { summary: "Smoke needs_input setup." });
+  updateJobStatus(skippable.id, "needs_input", { error: "Smoke recoverable analyst failure.", summary: "Needs a decision." });
+  const skipped = await request(`/api/jobs/${skippable.id}/skip`, {
+    method: "POST",
+    headers
+  });
+  assert.equal(skipped.status, 200);
+  assert.equal(skipped.data.job.status, "cancelled");
+  assert.match(skipped.data.job.summary, /Demanda ignorada/);
+  assert.ok(Array.isArray(skipped.data.events));
+  assert.ok(Array.isArray(skipped.data.artifacts));
+
+  const hangingAnalyst = createHangingAnalyst("gemini");
+  const analystCancelJob = await request("/api/jobs", {
+    method: "POST",
+    headers,
+    body: {
+      goal: "Smoke cancel hanging analyst job",
+      workspace: root,
+      mode: "analyze",
+      policyLevel: "read",
+      timeoutMs: 5000
+    }
+  });
+  assert.equal(analystCancelJob.status, 201);
+  jobIds.push(analystCancelJob.data.job.id);
+  const runningAnalysts = request(`/api/jobs/${analystCancelJob.data.job.id}/analysts/run`, {
+    method: "POST",
+    headers,
+    body: {
+      consent: { gemini: true },
+      bins: { gemini: hangingAnalyst },
+      timeoutMs: 5000
+    }
+  });
+  await waitForJobEvent(analystCancelJob.data.job.id, "analyst.process_started", headers);
+  const cancelAnalyst = await request(`/api/jobs/${analystCancelJob.data.job.id}/cancel`, {
+    method: "POST",
+    headers
+  });
+  assert.equal(cancelAnalyst.status, 202);
+  const analystCancelled = await runningAnalysts;
+  assert.equal(analystCancelled.data.job.status, "cancelled");
+
   const routineDraft = await request("/api/routine/jobs", {
     method: "POST",
     headers,
@@ -137,6 +197,17 @@ try {
   });
   assert.equal(approvedRoutineDraft.status, 200);
   assert.equal(approvedRoutineDraft.data.job.status, "queued");
+
+  const continuity = await request("/api/local/chat", {
+    method: "POST",
+    headers,
+    body: {
+      text: "o que esta em andamento?"
+    }
+  });
+  assert.equal(continuity.status, 200);
+  assert.match(continuity.data.reply, /demanda\(s\) em aberto/);
+  assert.ok(continuity.data.jobs.some((job) => job.id === routineDraft.data.job.id));
 
   const blockedRoutineImplement = await request("/api/routine/jobs", {
     method: "POST",
@@ -192,6 +263,9 @@ try {
     cleanup.prepare("DELETE FROM jobs WHERE id = ?").run(id);
   }
   cleanup.close();
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { force: true, recursive: true });
+  }
 }
 
 async function request(pathname, options = {}) {
@@ -229,6 +303,30 @@ async function waitForServer(url, stderr) {
   throw new Error(`Smoke server did not start: ${stderr.join("")}`);
 }
 
+async function waitForJobStatus(jobId, status, headers) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const detail = await request(`/api/jobs/${jobId}`, { headers });
+    if (detail.data.job?.status === status) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail(`Timed out waiting for job ${jobId} to reach ${status}.`);
+}
+
+async function waitForJobEvent(jobId, eventType, headers) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const detail = await request(`/api/jobs/${jobId}`, { headers });
+    if ((detail.data.events || []).some((event) => event.type === eventType)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail(`Timed out waiting for job ${jobId} event ${eventType}.`);
+}
+
 async function freePort() {
   const server = net.createServer();
   server.listen(0, host);
@@ -238,4 +336,31 @@ async function freePort() {
   server.close();
   await once(server, "close");
   return selectedPort;
+}
+
+function createHangingAnalyst(name) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `aura-smoke-hang-${name}-`));
+  tempDirs.push(dir);
+  const scriptPath = path.join(dir, process.platform === "win32" ? `${name}.cmd` : name);
+
+  if (process.platform === "win32") {
+    fs.writeFileSync(scriptPath, [
+      "@echo off",
+      `if "%1"=="--version" echo ${name} fake& exit /b 0`,
+      `"${process.execPath}" -e "setTimeout(() => {}, 10000)"`,
+      "exit /b 0"
+    ].join("\r\n"));
+  } else {
+    fs.writeFileSync(scriptPath, [
+      "#!/usr/bin/env sh",
+      "if [ \"$1\" = \"--version\" ]; then",
+      `  echo '${name} fake'`,
+      "  exit 0",
+      "fi",
+      `"${process.execPath}" -e 'setTimeout(() => {}, 10000)'`
+    ].join("\n"));
+    fs.chmodSync(scriptPath, 0o755);
+  }
+
+  return scriptPath;
 }
