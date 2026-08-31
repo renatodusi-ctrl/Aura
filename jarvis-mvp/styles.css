@@ -1381,14 +1381,24 @@ select {
 }
 
 .integration-card.checking .integration-dot,
-.integration-card.detected .integration-dot {
+.integration-card.detected .integration-dot,
+.integration-card.circuit_open .integration-dot {
   background: var(--accent-2);
 }
 
 .integration-card.checking .integration-state,
-.integration-card.detected .integration-state {
+.integration-card.detected .integration-state,
+.integration-card.circuit_open .integration-state {
   color: var(--accent-2);
   border-color: rgba(242, 184, 75, .45);
+}
+
+.integration-reset-button {
+  grid-column: 2;
+  justify-self: start;
+  min-height: 24px;
+  padding: 3px 7px;
+  font-size: 10px;
 }
 
 .integration-card.unavailable .integration-dot {

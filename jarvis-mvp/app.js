@@ -1038,20 +1038,56 @@ function renderIntegrations() {
     state.textContent = labelForIntegrationState(item.state);
 
     row.append(dot, body, state);
+    if (item.circuit?.open && item.key && index < items.length) {
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "integration-reset-button";
+      reset.textContent = "Resetar circuito";
+      reset.title = "Libera nova tentativa manual sem executar a demanda automaticamente.";
+      reset.addEventListener("click", async () => {
+        await withBusyButton(reset, "Resetando", async () => resetProviderCircuit(item.key));
+      });
+      row.append(reset);
+    }
     return row;
   }));
 }
 
 function integrationItemForProvider(name, provider = {}) {
   const status = provider.status || (provider.available ? "available" : "unavailable");
+  const circuit = provider.circuit || {};
+  const retryLabel = circuit.retryAt ? `Proxima tentativa ${formatDateTime(circuit.retryAt)}` : "";
   return {
+    key: provider.name || String(name || "").toLowerCase(),
     name: provider.label || name,
     role: roleForProvider(provider.name || name),
-    detail: provider.available
-      ? provider.note || provider.version || "CLI disponivel"
-      : provider.error || "nao configurado neste ambiente",
-    state: status
+    detail: circuit.open
+      ? [provider.error || circuit.reason || "Circuit breaker ativo.", retryLabel].filter(Boolean).join(" · ")
+      : provider.available
+        ? provider.note || provider.version || "CLI disponivel"
+        : provider.error || "nao configurado neste ambiente",
+    state: status,
+    circuit
   };
+}
+
+async function resetProviderCircuit(provider) {
+  const result = await api(`/api/providers/${provider}/circuit/reset`, {
+    method: "POST",
+    body: { jobId: state.selectedJob?.id || null }
+  });
+  appendMessage("system", `${displayProviderName(result.provider)} liberado para nova tentativa manual. Nenhuma execucao foi iniciada automaticamente.`);
+  await refreshAll();
+  logEvent("provider.circuit.reset", { provider: result.provider, jobId: state.selectedJob?.id || null });
+}
+
+function displayProviderName(provider) {
+  const labels = {
+    gemini: "Gemini",
+    grok: "Grok",
+    openrouter: "OpenRouter"
+  };
+  return labels[provider] || provider;
 }
 
 function roleForProvider(name) {
@@ -1076,7 +1112,8 @@ function labelForIntegrationState(status) {
     available: "pronto",
     detected: "detectado",
     unavailable: "off",
-    checking: "local"
+    checking: "local",
+    circuit_open: "cooldown"
   };
   return labels[status] || status;
 }

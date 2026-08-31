@@ -169,6 +169,48 @@ try {
   const analystCancelled = await runningAnalysts;
   assert.equal(analystCancelled.data.job.status, "cancelled");
 
+  const badGemini = createBadHealthAnalyst("gemini");
+  const circuitJob = await request("/api/jobs", {
+    method: "POST",
+    headers,
+    body: {
+      goal: "Smoke provider circuit reset",
+      workspace: root,
+      mode: "analyze",
+      policyLevel: "read",
+      timeoutMs: 3000
+    }
+  });
+  assert.equal(circuitJob.status, 201);
+  jobIds.push(circuitJob.data.job.id);
+  const circuitRun = await request(`/api/jobs/${circuitJob.data.job.id}/analysts/run`, {
+    method: "POST",
+    headers,
+    body: {
+      consent: { gemini: true },
+      bins: { gemini: badGemini },
+      timeoutMs: 3000
+    }
+  });
+  assert.equal(circuitRun.status, 200);
+  assert.equal(circuitRun.data.job.status, "needs_input");
+  const circuitStatus = await request("/api/status", { headers });
+  assert.equal(circuitStatus.status, 200);
+  assert.equal(circuitStatus.data.providers.gemini.status, "circuit_open");
+  assert.ok(circuitStatus.data.providers.gemini.circuit.retryAt);
+  const resetCircuit = await request("/api/providers/gemini/circuit/reset", {
+    method: "POST",
+    headers,
+    body: { jobId: circuitJob.data.job.id }
+  });
+  assert.equal(resetCircuit.status, 200, JSON.stringify(resetCircuit.data));
+  assert.equal(resetCircuit.data.reset, true);
+  assert.equal(resetCircuit.data.retry.duplicateExecution, false);
+  const afterReset = await request("/api/status", { headers });
+  assert.notEqual(afterReset.data.providers.gemini.status, "circuit_open");
+  const circuitEvents = await request(`/api/jobs/${circuitJob.data.job.id}/events`, { headers });
+  assert.ok(circuitEvents.data.events.some((event) => event.type === "analyst.circuit_reset"));
+
   const routineDraft = await request("/api/routine/jobs", {
     method: "POST",
     headers,
@@ -364,6 +406,33 @@ function createHangingAnalyst(name) {
       "  exit 0",
       "fi",
       `"${process.execPath}" -e 'setTimeout(() => {}, 10000)'`
+    ].join("\n"));
+    fs.chmodSync(scriptPath, 0o755);
+  }
+
+  return scriptPath;
+}
+
+function createBadHealthAnalyst(name) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `aura-smoke-bad-health-${name}-`));
+  tempDirs.push(dir);
+  const scriptPath = path.join(dir, process.platform === "win32" ? `${name}.cmd` : name);
+
+  if (process.platform === "win32") {
+    fs.writeFileSync(scriptPath, [
+      "@echo off",
+      `if "%1"=="--version" echo ${name} fake& exit /b 0`,
+      "echo not-json",
+      "exit /b 0"
+    ].join("\r\n"));
+  } else {
+    fs.writeFileSync(scriptPath, [
+      "#!/usr/bin/env sh",
+      "if [ \"$1\" = \"--version\" ]; then",
+      `  echo '${name} fake'`,
+      "  exit 0",
+      "fi",
+      "echo not-json"
     ].join("\n"));
     fs.chmodSync(scriptPath, 0o755);
   }

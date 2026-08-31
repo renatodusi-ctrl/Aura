@@ -22,6 +22,7 @@ import {
   listJobEvents,
   listJobs,
   getCostSummary,
+  recordJobEvent,
   recordCostUsage,
   updateJobDraft,
   updateJobStatus
@@ -31,7 +32,14 @@ import { evaluateJobPolicy, normalizePolicyLevel, POLICY_LEVELS } from "./policy
 import { createSessionToken, isAllowedOrigin, isProtectedApiPath, validateSessionRequest } from "./httpSecurity.js";
 import { activeJobProcessSummary, cancelJobProcess } from "./supervisor.js";
 import { detectCodex, runCodexAsk, runCodexImplement } from "./codexAdapter.js";
-import { activeAnalystProcessSummary, analystCircuitState, buildEvidenceBrief, cancelAnalystJobProcess, runAnalysts } from "./analystAdapter.js";
+import {
+  activeAnalystProcessSummary,
+  analystCircuitState,
+  buildEvidenceBrief,
+  cancelAnalystJobProcess,
+  resetAnalystCircuit,
+  runAnalysts
+} from "./analystAdapter.js";
 import { synthesizeDebate } from "./debateSynthesizer.js";
 import { handleVoiceIntent } from "./voiceIntents.js";
 import { buildVoiceHealth } from "./voiceHealth.js";
@@ -166,6 +174,11 @@ async function route(req, res) {
 
   if (url.pathname === "/api/routine/jobs" && method === "POST") {
     return createRoutineJobRoute(req, res);
+  }
+
+  const providerCircuitRoute = matchProviderCircuitRoute(url.pathname);
+  if (providerCircuitRoute && method === "POST") {
+    return resetProviderCircuitRoute(providerCircuitRoute.provider, req, res);
   }
 
   const jobRoute = matchJobRoute(url.pathname);
@@ -843,6 +856,45 @@ function skipJobRoute(id, res) {
   }
 }
 
+async function resetProviderCircuitRoute(provider, req, res) {
+  try {
+    const body = await readJson(req);
+    const normalized = normalizeAnalystName(provider);
+    const before = analystCircuitState(normalized);
+    resetAnalystCircuit(normalized);
+    providerPreflightCache = null;
+    const after = analystCircuitState(normalized);
+
+    if (body.jobId) {
+      const job = getJob(Number(body.jobId));
+      if (!job) {
+        throw httpError(404, "Job not found.");
+      }
+      recordJobEvent(job.id, "analyst.circuit_reset", `${displayName(normalized)} circuit breaker reset by operator.`, {
+        provider: normalized,
+        before,
+        after,
+        manual: true,
+        retry: "manual"
+      });
+    }
+
+    return sendJson(res, 200, {
+      provider: normalized,
+      reset: true,
+      before,
+      after,
+      retry: {
+        eligible: true,
+        mode: "manual",
+        duplicateExecution: false
+      }
+    });
+  } catch (error) {
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not reset provider circuit."));
+  }
+}
+
 async function codexAskRoute(id, req, res) {
   try {
     const body = await readJson(req);
@@ -901,6 +953,7 @@ async function analystsRunRoute(id, req, res) {
       debateRounds: budget.maxRounds,
       progressiveDebate: budget.progressive === true
     });
+    providerPreflightCache = null;
     if (body.synthesize === true && output.job.status === "done") {
       output.debate = synthesizeDebate({
         jobId: id,
@@ -1013,6 +1066,28 @@ function matchJobRoute(pathname) {
     id: Number(match[1]),
     action: match[2] || null
   };
+}
+
+function matchProviderCircuitRoute(pathname) {
+  const match = pathname.match(/^\/api\/providers\/([a-z0-9_-]+)\/circuit\/reset$/i);
+  return match ? { provider: match[1] } : null;
+}
+
+function normalizeAnalystName(name) {
+  const normalized = String(name || "").toLowerCase();
+  if (!["gemini", "grok", "openrouter"].includes(normalized)) {
+    throw httpError(400, "Circuit reset is available for gemini, grok or openrouter.");
+  }
+  return normalized;
+}
+
+function displayName(name) {
+  const labels = {
+    gemini: "Gemini",
+    grok: "Grok",
+    openrouter: "OpenRouter"
+  };
+  return labels[name] || name;
 }
 
 function matchTaskDevelopRoute(pathname) {
