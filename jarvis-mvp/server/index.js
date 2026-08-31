@@ -43,6 +43,7 @@ import {
 import { synthesizeDebate } from "./debateSynthesizer.js";
 import { handleVoiceIntent } from "./voiceIntents.js";
 import { buildVoiceHealth } from "./voiceHealth.js";
+import { rememberDecision, rememberJobEvent, rememberPreference, sessionMemorySummary } from "./sessionMemory.js";
 import { redactText } from "./redaction.js";
 import { filteredToolEnv, killProcessTree, prepareToolSpawn, spawnToolSync } from "./processTools.js";
 import { codexActivityPayload, listLocalFolder, localRootsPayload } from "./localAccess.js";
@@ -129,6 +130,7 @@ async function route(req, res) {
         jobProcesses: activeJobProcessSummary(),
         analystProcesses: activeAnalystProcessSummary()
       },
+      sessionMemory: sessionMemorySummary(),
       tools: listTools()
     });
   }
@@ -724,6 +726,7 @@ async function createJobRoute(req, res) {
       status = 403;
     }
 
+    rememberJobEvent(finalJob, "created");
     return sendJson(res, status, { job: finalJob, events: listJobEvents(job.id), policy });
   } catch (error) {
     return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not create job."));
@@ -754,6 +757,7 @@ async function createRoutineJobRoute(req, res) {
         }
       }
     });
+    rememberJobEvent(job, "routine_created");
     return sendJson(res, 201, { job, events: listJobEvents(job.id), policy: evaluateJobPolicy("read") });
   } catch (error) {
     return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not create routine job."));
@@ -807,6 +811,7 @@ function approveJobRoute(id, res) {
     const queued = updateJobStatus(job.id, "queued", {
       summary: "Draft approved. Execution remains manual."
     });
+    rememberJobEvent(queued, "approved");
     return sendJson(res, 200, { job: queued, events: listJobEvents(job.id), artifacts: listJobArtifacts(job.id) });
   } catch (error) {
     return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not approve draft job."));
@@ -821,16 +826,21 @@ function cancelJobRoute(id, res) {
     }
 
     if (cancelJobProcess(job.id)) {
-      return sendJson(res, 202, { job: getJob(job.id), cancellation: "requested", events: listJobEvents(job.id) });
+      const current = getJob(job.id);
+      rememberJobEvent(current, "cancel_requested");
+      return sendJson(res, 202, { job: current, cancellation: "requested", events: listJobEvents(job.id) });
     }
 
     if (cancelAnalystJobProcess(job.id)) {
-      return sendJson(res, 202, { job: getJob(job.id), cancellation: "requested", events: listJobEvents(job.id) });
+      const current = getJob(job.id);
+      rememberJobEvent(current, "cancel_requested");
+      return sendJson(res, 202, { job: current, cancellation: "requested", events: listJobEvents(job.id) });
     }
 
     const cancelled = updateJobStatus(job.id, "cancelled", {
       summary: "Job cancelled before execution."
     });
+    rememberJobEvent(cancelled, "cancelled");
     return sendJson(res, 200, { job: cancelled, events: listJobEvents(job.id) });
   } catch (error) {
     return sendJson(res, 409, { error: error.message || "Could not cancel job." });
@@ -850,6 +860,7 @@ function skipJobRoute(id, res) {
     const skipped = updateJobStatus(job.id, "cancelled", {
       summary: "Demanda ignorada por decisao do usuario. Nenhuma acao foi executada."
     });
+    rememberJobEvent(skipped, "skipped");
     return sendJson(res, 200, { job: skipped, events: listJobEvents(job.id), artifacts: listJobArtifacts(job.id) });
   } catch (error) {
     return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not skip job."));
@@ -904,6 +915,7 @@ async function codexAskRoute(id, req, res) {
       bin: body.bin,
       timeoutMs: body.timeoutMs
     });
+    rememberJobEvent(output.job, output.job.status === "done" ? "completed" : "reviewed");
     return sendJson(res, output.job.status === "failed" ? 503 : 200, responseForCommandOutput(output));
   } catch (error) {
     return sendJson(res, 400, { error: error.message || "Could not run Codex ask." });
@@ -921,6 +933,7 @@ async function codexImplementRoute(id, req, res) {
       timeoutMs: body.timeoutMs || config.codexTimeoutMs,
       testCommand: body.testCommand
     });
+    rememberJobEvent(output.job, output.job.status === "done" ? "completed" : "reviewed");
     return sendJson(res, output.job.status === "failed" ? 503 : 200, responseForCommandOutput(output));
   } catch (error) {
     return sendJson(res, 400, { error: error.message || "Could not run Codex implement." });
@@ -963,7 +976,9 @@ async function analystsRunRoute(id, req, res) {
       output.job = output.debate.job;
       output.artifacts = output.debate.artifacts;
       output.events = output.debate.events;
+      rememberDecision(output.job, output.debate.synthesis);
     }
+    rememberJobEvent(output.job, output.job.status === "done" ? "completed" : "reviewed");
     return sendJson(res, output.job.status === "failed" ? 503 : 200, responseForCommandOutput(output));
   } catch (error) {
     return sendJson(res, 400, { error: error.message || "Could not run analysts." });
@@ -1003,6 +1018,8 @@ async function debateSynthesizeRoute(id, req, res) {
       requested: body.requested === true,
       budget: body.budget || {}
     });
+    rememberDecision(output.job, output.synthesis);
+    rememberJobEvent(output.job, "reviewed");
     return sendJson(res, 200, output);
   } catch (error) {
     return sendJson(res, 400, { error: error.message || "Could not synthesize debate." });
@@ -1173,6 +1190,7 @@ function buildNowSnapshot() {
     jobRef: activeJob ? nowJobReference(activeJob) : null,
     demandRef: activeJob ? nowJobReference(activeJob) : null,
     councilDecision: decision ? summarizeDebateSynthesis(decision) : null,
+    sessionMemory: sessionMemorySummary(),
     counts: {
       openTasks: tasks.length,
       waitingJobs: jobs.filter((job) => ["draft", "awaiting_confirm", "needs_input"].includes(job.status)).length,
@@ -1379,6 +1397,8 @@ function localChat(body) {
     return { reply: "Diga o que voce quer fazer." };
   }
 
+  rememberPreference(text, body.requestedBy || "text");
+
   const developmentIntent = parseTaskDevelopmentIntent(text);
   if (developmentIntent) {
     return createDevelopmentJobFromTask(developmentIntent.taskId, {
@@ -1403,6 +1423,9 @@ function localChat(body) {
 
   const voiceIntent = handleVoiceIntent(text);
   if (voiceIntent) {
+    if (voiceIntent.job) {
+      rememberJobEvent(voiceIntent.job, "voice");
+    }
     return voiceIntent;
   }
 
@@ -1430,15 +1453,18 @@ function localChat(body) {
 
 function localWorkContinuity() {
   const now = buildNowSnapshot();
+  const session = sessionMemorySummary();
   const jobs = listJobs(8);
   const active = jobs.filter((job) => ["draft", "awaiting_confirm", "queued", "running", "needs_input"].includes(job.status));
+  const sessionLines = sessionSummaryLines(session);
   if (!active.length) {
     const latest = jobs[0];
     return {
       reply: latest
-        ? `Agora: ${now.nextStep} Ultima demanda: ${latest.id}, ${latest.status}, ${latest.summary || latest.goal}`
-        : `Agora: ${now.nextStep}`,
+        ? [`Agora: ${now.nextStep}`, ...sessionLines, `Ultima demanda: ${latest.id}, ${latest.status}, ${latest.summary || latest.goal}`].join("\n")
+        : [`Agora: ${now.nextStep}`, ...sessionLines].join("\n"),
       now,
+      sessionMemory: session,
       jobs
     };
   }
@@ -1446,12 +1472,28 @@ function localWorkContinuity() {
   return {
     reply: [
       `Agora: ${now.nextStep}`,
+      ...sessionLines,
       `Temos ${active.length} demanda(s) em aberto:`,
       ...active.map((job) => `- ${job.id}: ${job.status}, ${job.mode}. ${job.summary || job.goal}`)
     ].join("\n"),
     now,
+    sessionMemory: session,
     jobs: active
   };
+}
+
+function sessionSummaryLines(session) {
+  const lines = [];
+  if (session.lastDecision?.recommendation) {
+    lines.push(`Ultima decisao: ${session.lastDecision.recommendation}`);
+  }
+  if (session.recentPreference?.text) {
+    lines.push(`Preferencia recente: ${session.recentPreference.text}`);
+  }
+  if (session.nextAction) {
+    lines.push(`Memoria da sessao: ${session.nextAction}`);
+  }
+  return lines.slice(0, 3);
 }
 
 function parseTaskDevelopmentIntent(text) {
@@ -1619,6 +1661,7 @@ function createDevelopmentJobFromTask(taskId, options = {}) {
     ? updateJobStatus(job.id, "awaiting_confirm", { summary: policy.reason })
     : job;
 
+  rememberJobEvent(finalJob, "task_development");
   return {
     reply: replyForTaskDevelopment(finalJob, task, executor),
     task,

@@ -73,6 +73,24 @@ try {
   });
   assert.equal(created.status, 201);
   jobIds.push(created.data.job.id);
+  const nowAfterCreated = await request("/api/now", { headers });
+  assert.equal(nowAfterCreated.status, 200);
+  assert.equal(nowAfterCreated.data.now.sessionMemory.activeJob.id, created.data.job.id);
+  assert.equal(nowAfterCreated.data.now.sessionMemory.retention.clearsOnRestart, true);
+
+  const preference = await request("/api/local/chat", {
+    method: "POST",
+    headers,
+    body: { text: "prefiro respostas curtas sem expor OPENAI_API_KEY=sk-proj-smoke-secret" }
+  });
+  assert.equal(preference.status, 200);
+  const sessionContinuity = await request("/api/local/chat", {
+    method: "POST",
+    headers,
+    body: { text: "o que esta acontecendo agora" }
+  });
+  assert.match(sessionContinuity.data.reply, /Preferencia recente:/);
+  assert.doesNotMatch(sessionContinuity.data.reply, /sk-proj-smoke-secret/);
 
   const listed = await request("/api/jobs?limit=5", { headers });
   assert.equal(listed.status, 200);
