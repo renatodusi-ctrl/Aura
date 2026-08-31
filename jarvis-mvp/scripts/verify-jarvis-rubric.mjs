@@ -31,7 +31,7 @@ for (const token of [
   "nextStepForJob",
   "ctaForJob",
   "normalizeAnalystBudget",
-  "explicitMultiRound"
+  "progressive"
 ]) {
   assert.match(index, new RegExp(token), `Missing Now backend token: ${token}`);
 }
@@ -40,7 +40,7 @@ for (const token of [
   "now-hud",
   "renderNowHud",
   "runNowAction",
-  "explicitMultiRound"
+  "progressive: safeRounds > 1"
 ]) {
   assert.match(app, new RegExp(token), `Missing Now HUD token: ${token}`);
 }

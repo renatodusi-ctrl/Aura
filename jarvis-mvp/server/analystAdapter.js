@@ -323,7 +323,8 @@ export async function runAnalysts({
   consent = {},
   bins = {},
   timeoutMs,
-  debateRounds = 1
+  debateRounds = 1,
+  progressiveDebate = false
 }) {
   const job = getJob(jobId);
   if (!job) {
@@ -474,10 +475,26 @@ export async function runAnalysts({
   }
 
   const requestedRounds = Math.max(1, Math.min(Number.parseInt(debateRounds, 10) || 1, 3));
+  const progressiveDecisions = [];
   if (requestedRounds > 1) {
     for (let round = 2; round <= requestedRounds; round += 1) {
       const previousSuccessful = analystResults.filter((entry) => entry.response && !entry.error);
       if (!previousSuccessful.length) {
+        break;
+      }
+      const progressiveDecision = progressiveDebate
+        ? progressiveDebateDecision(previousSuccessful, { round, maxRounds: requestedRounds })
+        : {
+            round,
+            maxRounds: requestedRounds,
+            run: true,
+            reasons: ["operator_requested"],
+            explanation: "Rodada extra executada por solicitacao explicita do operador.",
+            signals: debateQualitySignals(previousSuccessful)
+          };
+      progressiveDecisions.push(progressiveDecision);
+      recordJobEvent(job.id, "analyst.debate_round_decision", "Progressive debate round evaluated.", progressiveDecision);
+      if (!progressiveDecision.run) {
         break;
       }
       if (Date.now() >= deadline || cancelled) {
@@ -492,7 +509,8 @@ export async function runAnalysts({
         metadata: {
           destinations: previousSuccessful.map((entry) => entry.name),
           round,
-          promptPurpose: "dissent-review"
+          promptPurpose: "dissent-review",
+          progressiveDecision
         }
       });
 
@@ -582,11 +600,22 @@ export async function runAnalysts({
 
   const successful = analystResults.filter((entry) => entry.response && !entry.error);
   const failed = analystResults.filter((entry) => entry.error);
+  const roundsCompleted = Math.max(0, ...successful.map((entry) => entry.round || 1));
+  const debateBudget = {
+    maxRounds: requestedRounds,
+    requestedMaxRounds: requestedRounds,
+    roundsRequested: requestedRounds,
+    roundsUsed: roundsCompleted || 1,
+    progressive: progressiveDebate,
+    progressiveDecisions,
+    followUpRounds: progressiveDebate ? 0 : Math.max(0, requestedRounds - (roundsCompleted || 1))
+  };
   const telemetry = analystTelemetry(selected, usableAnalysts, analystResults, {
     totalTimeoutMs,
     providerTimeoutMs,
     cancelled,
-    degraded: successful.length > 0 && failed.length > 0
+    degraded: successful.length > 0 && failed.length > 0,
+    debateBudget
   });
   createJobArtifact(job.id, {
     kind: "analyst-telemetry",
@@ -606,7 +635,8 @@ export async function runAnalysts({
       usableDestinations: usableAnalysts,
       failedDestinations: failed.map((entry) => entry.name),
       roundsRequested: requestedRounds,
-      roundsCompleted: Math.max(0, ...successful.map((entry) => entry.round || 1)),
+      roundsCompleted,
+      debateBudget,
       telemetry,
       lastCompletedAt: new Date().toISOString(),
       recovery: successful.length ? "none" : "retry_or_skip"
@@ -617,8 +647,57 @@ export async function runAnalysts({
     job: finalJob,
     brief,
     analysts: analystResults,
+    debateBudget,
     artifacts: listJobArtifacts(job.id),
     events: listJobEvents(job.id)
+  };
+}
+
+export function debateQualitySignals(analystResults) {
+  const successful = analystResults.filter((entry) => entry.response && !entry.error);
+  const recommendations = [...new Set(successful
+    .map((entry) => normalizeComparable(entry.response?.recommendation))
+    .filter(Boolean))];
+  const confidences = successful
+    .map((entry) => normalizeConfidence(entry.response?.confidence))
+    .filter(Boolean);
+  const riskCount = successful.reduce((sum, entry) => sum + normalizeStringArray(entry.response?.risks).length, 0);
+  const openQuestionCount = successful.reduce((sum, entry) => sum + normalizeStringArray(entry.response?.open_questions).length, 0);
+  return {
+    successfulCount: successful.length,
+    recommendationCount: recommendations.length,
+    hasDissent: recommendations.length > 1,
+    hasLowConfidence: confidences.includes("low"),
+    riskCount,
+    openQuestionCount,
+    hasHighDecisionRisk: riskCount >= 2 || (riskCount >= 1 && openQuestionCount >= 1)
+  };
+}
+
+export function progressiveDebateDecision(analystResults, { round = 2, maxRounds = 1 } = {}) {
+  const signals = debateQualitySignals(analystResults);
+  const reasons = [];
+  if (signals.hasLowConfidence) {
+    reasons.push("low_confidence");
+  }
+  if (signals.hasDissent) {
+    reasons.push("dissent");
+  }
+  if (signals.hasHighDecisionRisk) {
+    reasons.push("decision_risk");
+  }
+
+  const canRun = Number(round) <= Number(maxRounds) && signals.successfulCount > 0;
+  const run = canRun && reasons.length > 0;
+  return {
+    round,
+    maxRounds,
+    run,
+    reasons,
+    signals,
+    explanation: run
+      ? `Rodada ${round} executada por ${reasons.join(", ")}.`
+      : `Rodada ${round} ignorada: confianca suficiente, sem dissenso relevante ou risco alto.`
   };
 }
 
@@ -988,6 +1067,10 @@ function normalizeStringArray(value) {
 function normalizeConfidence(value) {
   const normalized = String(value || "low").toLowerCase();
   return ["low", "medium", "high"].includes(normalized) ? normalized : "low";
+}
+
+function normalizeComparable(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function isValidAnalystSchema(value) {

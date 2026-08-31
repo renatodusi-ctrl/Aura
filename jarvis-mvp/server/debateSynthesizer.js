@@ -38,8 +38,9 @@ export function synthesizeDebate({ jobId, requested = false, budget = {} }) {
   }
 
   const synthesis = buildSynthesis(responses, {
+    ...budget,
     maxRounds,
-    roundsRequested: maxRounds,
+    roundsRequested: budget.roundsRequested || maxRounds,
     roundsUsed: Math.min(maxRoundFromResponses(responses), maxRounds),
     requested
   });
@@ -52,6 +53,8 @@ export function synthesizeDebate({ jobId, requested = false, budget = {} }) {
       roundsUsed: synthesis.budget.roundsUsed,
       maxRounds: synthesis.budget.maxRounds,
       followUpRounds: synthesis.budget.followUpRounds,
+      progressive: synthesis.budget.progressive === true,
+      progressiveDecisions: synthesis.budget.progressiveDecisions || [],
       sources: responses.map((response) => response.source)
     }
   });
@@ -158,7 +161,8 @@ function buildSynthesis(responses, budget) {
 }
 
 function debateRounds({ responses, consensus, dissent, risks, openQuestions, budget }) {
-  const followUpRounds = Math.max(0, budget.maxRounds - budget.roundsUsed);
+  const progressiveDecisions = Array.isArray(budget.progressiveDecisions) ? budget.progressiveDecisions : [];
+  const followUpRounds = budget.progressive === true ? 0 : Math.max(0, budget.maxRounds - budget.roundsUsed);
   const rounds = [];
   const groupedRounds = new Map();
   for (const response of responses) {
@@ -189,8 +193,18 @@ function debateRounds({ responses, consensus, dissent, risks, openQuestions, bud
       prompts: followUpPrompts({ dissent, risks, openQuestions })
     });
   }
+  for (const decision of progressiveDecisions.filter((item) => item.run === false)) {
+    rounds.push({
+      round: decision.round,
+      type: "progressive-dissent-review",
+      status: "skipped",
+      reason: decision.explanation,
+      signals: decision.signals
+    });
+  }
 
   budget.followUpRounds = followUpRounds;
+  budget.progressiveDecisions = progressiveDecisions;
   budget.roundsPlanned = rounds.length;
   return rounds;
 }

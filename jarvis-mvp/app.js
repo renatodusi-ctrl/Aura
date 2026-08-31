@@ -1658,6 +1658,7 @@ function renderCouncilDecisionCard() {
   appendFact(facts, "Riscos", formatInteger(synthesis.risks?.length || 0));
   appendFact(facts, "Nao verificado", formatInteger(synthesis.unverified?.length || 0));
   appendFact(facts, "Rodadas", debateRoundLabel(synthesis));
+  appendFact(facts, "Criterio", progressiveDebateLabel(synthesis));
 
   card.append(label, recommendation, facts);
   const actions = renderCouncilDecisionActions(synthesis);
@@ -1673,6 +1674,18 @@ function debateRoundLabel(synthesis) {
   return followUp > 0
     ? `${used} executada(s), ${followUp} pendente(s)`
     : `${used} executada(s)`;
+}
+
+function progressiveDebateLabel(synthesis) {
+  const decisions = synthesis.budget?.progressiveDecisions || [];
+  const latest = decisions.at(-1);
+  if (!latest) {
+    return "1 rodada direta";
+  }
+  if (latest.run) {
+    return `extra: ${latest.reasons?.join(", ") || "criterio ativo"}`;
+  }
+  return "sem rodada extra";
 }
 
 function renderCouncilDecisionActions(synthesis) {
@@ -2174,13 +2187,13 @@ function renderAnalystConsent(job) {
   const rounds = document.createElement("label");
   rounds.className = "select-control";
   const roundsText = document.createElement("span");
-  roundsText.textContent = "Rodadas do Conselho";
+  roundsText.textContent = "Teto de rodadas";
   const roundsSelect = document.createElement("select");
-  roundsSelect.setAttribute("aria-label", "Rodadas do Conselho");
+  roundsSelect.setAttribute("aria-label", "Teto de rodadas do Conselho");
   [
-    ["1", "1 rodada"],
-    ["2", "2 rodadas"],
-    ["3", "3 rodadas"]
+    ["1", "Ate 1 rodada"],
+    ["2", "Ate 2 rodadas"],
+    ["3", "Ate 3 rodadas"]
   ].forEach(([value, label]) => {
     const option = document.createElement("option");
     option.value = value;
@@ -2229,7 +2242,7 @@ async function runAnalystConsultation(job, consent, extraContext = {}, maxRounds
         synthesize: true,
         budget: {
           maxRounds: safeRounds,
-          explicitMultiRound: safeRounds > 1
+          progressive: safeRounds > 1
         }
       }
     });

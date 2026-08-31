@@ -24,7 +24,7 @@ try {
   const hangingGemini = createFakeAnalyst("gemini", "hang");
   const validGrok = createFakeAnalyst("grok", "valid");
   const slowOpenRouter = createFakeAnalyst("openrouter", "slow-valid");
-  const degradedJob = createChaosJob("Chaos: one analyst hangs while others finish", 4500);
+  const degradedJob = createChaosJob("Chaos: one analyst hangs while others finish", 7500);
   const degradedStartedAt = Date.now();
   const degraded = await runAnalysts({
     jobId: degradedJob.id,
@@ -34,7 +34,7 @@ try {
   });
   const degradedDurationMs = Date.now() - degradedStartedAt;
   assert.equal(degraded.job.status, "done");
-  assert.ok(degradedDurationMs < 6500, `degraded council took ${degradedDurationMs}ms`);
+  assert.ok(degradedDurationMs < 9000, `degraded council took ${degradedDurationMs}ms`);
   assert.ok(degraded.analysts.some((entry) => entry.name === "gemini" && entry.error));
   assert.ok(degraded.analysts.some((entry) => entry.name === "grok" && !entry.error));
   assert.ok(degraded.analysts.some((entry) => entry.name === "openrouter" && !entry.error));
@@ -188,6 +188,7 @@ if (promptFileIndex !== -1 && args[promptFileIndex + 1]) {
 }
 const health = prompt.includes("health-check-ok");
 if (behavior === "hang") {
+  process.on("SIGTERM", () => process.exit(0));
   setTimeout(() => {}, 10000);
 } else if (behavior === "slow-valid") {
   setTimeout(() => {

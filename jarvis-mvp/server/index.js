@@ -898,13 +898,14 @@ async function analystsRunRoute(id, req, res) {
       consent: body.consent || {},
       bins: body.bins || {},
       timeoutMs: body.timeoutMs,
-      debateRounds: budget.maxRounds
+      debateRounds: budget.maxRounds,
+      progressiveDebate: budget.progressive === true
     });
     if (body.synthesize === true && output.job.status === "done") {
       output.debate = synthesizeDebate({
         jobId: id,
         requested: true,
-        budget
+        budget: output.debateBudget || budget
       });
       output.job = output.debate.job;
       output.artifacts = output.debate.artifacts;
@@ -919,13 +920,15 @@ async function analystsRunRoute(id, req, res) {
 function normalizeAnalystBudget(budget = {}, { synthesize = false } = {}) {
   const requestedRounds = Math.max(1, Math.min(Number.parseInt(budget.maxRounds, 10) || 1, 3));
   const explicitMultiRound = budget.explicitMultiRound === true || budget.operatorRequested === true;
-  const maxRounds = synthesize && (requestedRounds === 1 || explicitMultiRound) ? requestedRounds : 1;
+  const progressive = synthesize && requestedRounds > 1 && explicitMultiRound !== true;
+  const maxRounds = synthesize ? requestedRounds : 1;
   return {
     ...budget,
     maxRounds,
     requestedMaxRounds: requestedRounds,
+    progressive,
     explicitMultiRound,
-    cappedByProgressivePolicy: requestedRounds > maxRounds
+    cappedByProgressivePolicy: false
   };
 }
 
