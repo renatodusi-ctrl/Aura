@@ -36,6 +36,7 @@ import { synthesizeDebate } from "./debateSynthesizer.js";
 import { handleVoiceIntent } from "./voiceIntents.js";
 import { redactText } from "./redaction.js";
 import { filteredToolEnv, killProcessTree, prepareToolSpawn, spawnToolSync } from "./processTools.js";
+import { codexActivityPayload, listLocalFolder, localRootsPayload } from "./localAccess.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -120,6 +121,25 @@ async function route(req, res) {
 
   if (url.pathname === "/api/now" && method === "GET") {
     return sendJson(res, 200, { now: buildNowSnapshot() });
+  }
+
+  if (url.pathname === "/api/local-files" && method === "GET") {
+    return sendJson(res, 200, localRootsPayload());
+  }
+
+  if (url.pathname === "/api/local-files/list" && method === "GET") {
+    try {
+      return sendJson(res, 200, listLocalFolder({
+        rootId: url.searchParams.get("root") || 0,
+        relativePath: url.searchParams.get("path") || "."
+      }));
+    } catch (error) {
+      return sendJson(res, error.statusCode || 400, { error: error.message || "Could not list local folder." });
+    }
+  }
+
+  if (url.pathname === "/api/codex/activity" && method === "GET") {
+    return sendJson(res, 200, await codexActivityPayload());
   }
 
   if (url.pathname === "/api/jobs" && method === "GET") {
@@ -423,7 +443,7 @@ function geminiLiveSetupPayload() {
 }
 
 function geminiLiveInstructions() {
-  return `${systemPrompt}\n\nVoz Gemini Live:\n- Voce e AURA, uma assistente pessoal por voz.\n- Fale sempre em portugues brasileiro natural.\n- Responda com frases curtas e objetivas.\n- A sessao comeca em standby silencioso. Responda somente quando a fala contiver claramente o nome Aura.\n- Se ouvir ate logo Aura, obrigado Aura, pode descansar Aura ou tchau Aura, responda brevemente e volte ao standby.\n- Quando o usuario pedir para criar task ou demanda, use as ferramentas disponiveis.`;
+  return `${systemPrompt}\n\nVoz Gemini Live:\n- Voce e AURA, uma assistente pessoal por voz.\n- Fale sempre em portugues brasileiro natural.\n- Responda com frases curtas e objetivas.\n- A sessao comeca em standby silencioso. Responda somente quando a fala contiver claramente o nome Aura.\n- Se ouvir ate logo Aura, obrigado Aura, pode descansar Aura ou tchau Aura, responda brevemente e volte ao standby.\n- Quando o usuario pedir para criar task ou demanda, use as ferramentas disponiveis.\n- Quando o usuario pedir para ver pastas, projetos, arquivos locais ou o que existe no workspace, use aura_list_local_folder. A ferramenta e somente leitura e limitada as raizes permitidas.\n- Quando o usuario perguntar o que esta em andamento no Codex, use aura_codex_activity.`;
 }
 
 function geminiFunctionDeclarations() {
@@ -464,6 +484,25 @@ function geminiFunctionDeclarations() {
           executor: { type: "STRING", enum: ["codex", "council", "codex-council"] }
         },
         required: ["goal"]
+      }
+    },
+    {
+      name: "aura_list_local_folder",
+      description: "Lista, em modo somente leitura, pastas e arquivos dentro das raizes locais permitidas do cockpit.",
+      parameters: {
+        type: "OBJECT",
+        properties: {
+          root_id: { type: "INTEGER", description: "Indice da raiz permitida. Use 0 quando o usuario nao especificar." },
+          path: { type: "STRING", description: "Caminho relativo dentro da raiz permitida. Use ponto para a raiz." }
+        }
+      }
+    },
+    {
+      name: "aura_codex_activity",
+      description: "Consulta o que esta em andamento ou recente no Codex dentro do cockpit AURA.",
+      parameters: {
+        type: "OBJECT",
+        properties: {}
       }
     }
   ];
@@ -1710,7 +1749,7 @@ function realtimeSessionPayload() {
     session: {
       type: "realtime",
       model: config.realtimeModel,
-      instructions: `${systemPrompt}\n\nVoz e idioma:\n- Fale sempre em portugues brasileiro natural.\n- Use ritmo calmo, frases curtas e tom de assistente pessoal proximo.\n- Evite sotaque estrangeiro, traducoes literais e palavras em ingles quando houver equivalente comum em portugues.\n\nProtocolo de ativacao por voz:\n- A sessao começa em standby silencioso. Nao cumprimente e nao inicie conversa ao conectar.\n- Em standby, responda somente quando a fala do usuario contiver claramente o nome Aura.\n- Quando ouvir Aura junto de um pedido, considere a conversa ativa e responda ao pedido.\n- Enquanto a conversa estiver ativa, continue respondendo normalmente ate o usuario encerrar.\n- Se o usuario disser algo como ate logo Aura, obrigado Aura, pode descansar Aura ou tchau Aura, responda brevemente e volte para standby.\n- Depois de voltar ao standby, ignore falas sem Aura. Nao gere texto, audio nem chamadas de ferramenta para falas sem wake word.\n\nFerramentas por voz:\n- Se precisar criar uma task no cockpit, use aura_create_task e depois confirme em voz curta.\n- Se o usuario pedir para desenvolver uma task existente, use aura_develop_task. Se nao disser executor, assuma Codex.\n- Se citar Conselho, Gemini, Grok ou OpenRouter, use executor council para analise ou codex-council quando tambem pedir Codex.\n- Se o usuario pedir desenvolvimento sem citar task, use aura_create_development_demand.\n- Demandas de desenvolvimento sempre ficam visiveis no cockpit e exigem confirmacao visual antes do Codex escrever.`,
+      instructions: `${systemPrompt}\n\nVoz e idioma:\n- Fale sempre em portugues brasileiro natural.\n- Use ritmo calmo, frases curtas e tom de assistente pessoal proximo.\n- Evite sotaque estrangeiro, traducoes literais e palavras em ingles quando houver equivalente comum em portugues.\n\nProtocolo de ativacao por voz:\n- A sessao começa em standby silencioso. Nao cumprimente e nao inicie conversa ao conectar.\n- Em standby, responda somente quando a fala do usuario contiver claramente o nome Aura.\n- Quando ouvir Aura junto de um pedido, considere a conversa ativa e responda ao pedido.\n- Enquanto a conversa estiver ativa, continue respondendo normalmente ate o usuario encerrar.\n- Se o usuario disser algo como ate logo Aura, obrigado Aura, pode descansar Aura ou tchau Aura, responda brevemente e volte para standby.\n- Depois de voltar ao standby, ignore falas sem Aura. Nao gere texto, audio nem chamadas de ferramenta para falas sem wake word.\n\nFerramentas por voz:\n- Se precisar criar uma task no cockpit, use aura_create_task e depois confirme em voz curta.\n- Se o usuario pedir para desenvolver uma task existente, use aura_develop_task. Se nao disser executor, assuma Codex.\n- Se citar Conselho, Gemini, Grok ou OpenRouter, use executor council para analise ou codex-council quando tambem pedir Codex.\n- Se o usuario pedir desenvolvimento sem citar task, use aura_create_development_demand.\n- Se o usuario pedir para ver pastas, projetos, arquivos locais ou o que existe no workspace, use aura_list_local_folder. A ferramenta e somente leitura e limitada as raizes permitidas.\n- Se o usuario perguntar o que esta em andamento no Codex, use aura_codex_activity.\n- Demandas de desenvolvimento sempre ficam visiveis no cockpit e exigem confirmacao visual antes do Codex escrever.`,
       audio: {
         input: {
           noise_reduction: {
@@ -1800,6 +1839,33 @@ function realtimeSessionPayload() {
               }
             },
             required: ["goal"]
+          }
+        },
+        {
+          type: "function",
+          name: "aura_list_local_folder",
+          description: "Lista, em modo somente leitura, pastas e arquivos dentro das raizes locais permitidas do cockpit.",
+          parameters: {
+            type: "object",
+            properties: {
+              root_id: {
+                type: "integer",
+                description: "Indice da raiz permitida. Use 0 quando o usuario nao especificar."
+              },
+              path: {
+                type: "string",
+                description: "Caminho relativo dentro da raiz permitida. Use ponto para a raiz."
+              }
+            }
+          }
+        },
+        {
+          type: "function",
+          name: "aura_codex_activity",
+          description: "Consulta demandas em andamento ou recentes no Codex dentro do cockpit AURA.",
+          parameters: {
+            type: "object",
+            properties: {}
           }
         }
       ],

@@ -6,6 +6,10 @@ const state = {
   tasks: [],
   memories: [],
   costs: null,
+  localFiles: null,
+  codexActivity: null,
+  localFileRoot: 0,
+  localFilePath: ".",
   jobs: [],
   selectedJobId: null,
   selectedJob: null,
@@ -39,6 +43,8 @@ const els = {
   localForm: document.querySelector("#local-form"),
   localInput: document.querySelector("#local-input"),
   localSubmitButton: document.querySelector("#local-submit-button"),
+  voicePanel: document.querySelector(".voice-panel"),
+  commandBrief: document.querySelector("#command-brief"),
   attachmentInput: document.querySelector("#attachment-input"),
   attachmentTray: document.querySelector("#attachment-tray"),
   composerIntentButtons: Array.from(document.querySelectorAll("[data-composer-intent]")),
@@ -51,6 +57,10 @@ const els = {
   memoryList: document.querySelector("#memory-list"),
   costsRefreshButton: document.querySelector("#costs-refresh-button"),
   costsPanel: document.querySelector("#costs-panel"),
+  localFilesRefreshButton: document.querySelector("#local-files-refresh-button"),
+  localFilesPanel: document.querySelector("#local-files-panel"),
+  codexActivityRefreshButton: document.querySelector("#codex-activity-refresh-button"),
+  codexActivityPanel: document.querySelector("#codex-activity-panel"),
   topCostsRefreshButton: document.querySelector("#top-costs-refresh-button"),
   topCostsPanel: document.querySelector("#top-costs-panel"),
   topCostPanel: document.querySelector("[data-top-panel='costs']"),
@@ -226,6 +236,8 @@ function bindEvents() {
   els.screenButton.addEventListener("click", startScreenCapture);
   els.stopScreenButton.addEventListener("click", stopScreenCapture);
   els.costsRefreshButton.addEventListener("click", refreshCosts);
+  els.localFilesRefreshButton?.addEventListener("click", refreshLocalFiles);
+  els.codexActivityRefreshButton?.addEventListener("click", refreshCodexActivity);
   els.topCostsRefreshButton.addEventListener("click", refreshCosts);
   els.jobsRefreshButton.addEventListener("click", refreshJobs);
   els.topViewButtons.forEach((button) => {
@@ -392,13 +404,15 @@ function activeJobSummary() {
 }
 
 async function refreshAll() {
-  const [status, nowData, tasksData, memoriesData, jobsData, costsData] = await Promise.all([
+  const [status, nowData, tasksData, memoriesData, jobsData, costsData, localFilesData, codexActivityData] = await Promise.all([
     api("/api/status"),
     api("/api/now"),
     api("/api/tasks"),
     api("/api/memories"),
     api("/api/jobs?limit=20"),
-    api("/api/costs")
+    api("/api/costs"),
+    loadLocalFiles(),
+    api("/api/codex/activity")
   ]);
 
   state.status = status;
@@ -407,6 +421,8 @@ async function refreshAll() {
   state.memories = memoriesData.memories;
   state.jobs = jobsData.jobs;
   state.costs = costsData;
+  state.localFiles = localFilesData;
+  state.codexActivity = codexActivityData;
   await loadSelectedJob();
   renderStatus();
   renderNowHud();
@@ -417,6 +433,9 @@ async function refreshAll() {
   renderJobs();
   renderTools();
   renderCosts();
+  renderLocalFiles();
+  renderCodexActivity();
+  renderCommandBrief();
   renderIntegrations();
   renderLocalContextSummary();
   renderComposerIntents();
@@ -432,17 +451,37 @@ async function refreshJobs() {
   ]);
   state.now = nowData.now;
   state.jobs = jobsData.jobs;
+  state.codexActivity = await api("/api/codex/activity");
   await loadSelectedJob();
   renderJobs();
   renderCouncil();
   renderLocalContextSummary();
   renderNowHud();
   renderTopNextStep();
+  renderCommandBrief();
+  renderCodexActivity();
 }
 
 async function refreshCosts() {
   state.costs = await api("/api/costs");
   renderCosts();
+  renderCommandBrief();
+}
+
+async function refreshLocalFiles() {
+  state.localFiles = await loadLocalFiles();
+  renderLocalFiles();
+}
+
+async function refreshCodexActivity() {
+  state.codexActivity = await api("/api/codex/activity");
+  renderCodexActivity();
+}
+
+function loadLocalFiles() {
+  const root = encodeURIComponent(String(state.localFileRoot || 0));
+  const relativePath = encodeURIComponent(state.localFilePath || ".");
+  return api(`/api/local-files/list?root=${root}&path=${relativePath}`);
 }
 
 async function loadSelectedJob() {
@@ -597,6 +636,51 @@ function renderTopNextStep() {
   els.topNextStep.textContent = "Diga ou escreva uma missao para AURA organizar o trabalho.";
 }
 
+function renderCommandBrief() {
+  if (!els.commandBrief) {
+    return;
+  }
+
+  const voiceProvider = state.status?.realtimeProvider === "gemini" ? "Gemini Live" : "OpenAI";
+  const voiceState = state.status?.realtimeEnabled ? voiceProvider : "Texto local";
+  const selected = state.selectedJob;
+  const cost = state.costs?.totals?.estimatedCostUsd || 0;
+  const tokens = state.costs?.totals?.tokens || 0;
+  const intentLabels = {
+    chat: "Conversar",
+    council: "Conselho",
+    execute: "Codex"
+  };
+  const items = [
+    ["Modo", intentLabels[state.composerIntent] || "Conversar", modeHintForComposer()],
+    ["Voz", voiceState, state.status?.realtimeEnabled ? "standby por wake word" : "fallback local"],
+    ["Custo", formatUsd(cost), `${formatInteger(tokens)} tokens`],
+    ["Demanda", selected ? `#${selected.id}` : "Nenhuma", selected ? nextStepForJob(selected) : "pronta para uma nova missao"]
+  ];
+
+  els.commandBrief.replaceChildren(...items.map(([label, value, detail]) => {
+    const item = document.createElement("article");
+    const small = document.createElement("small");
+    small.textContent = label;
+    const strong = document.createElement("strong");
+    strong.textContent = value;
+    const span = document.createElement("span");
+    span.textContent = detail;
+    item.append(small, strong, span);
+    return item;
+  }));
+}
+
+function modeHintForComposer() {
+  if (state.composerIntent === "execute") {
+    return "cria demanda de escrita";
+  }
+  if (state.composerIntent === "council") {
+    return "consulta analistas";
+  }
+  return "resposta local ou voz";
+}
+
 function renderTopView() {
   const showCosts = state.topView === "costs";
   els.topViewButtons.forEach((button) => {
@@ -614,6 +698,22 @@ function renderComposerIntents() {
   els.composerIntentButtons.forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.composerIntent === state.composerIntent));
   });
+  if (els.voicePanel) {
+    els.voicePanel.dataset.intent = state.composerIntent;
+  }
+  const submitLabels = {
+    chat: "Enviar",
+    council: "Consultar",
+    execute: "Preparar"
+  };
+  const placeholders = {
+    chat: "Ex.: Aura, organize meu proximo passo",
+    council: "Ex.: Avalie o layout atual com Gemini, Grok e OpenRouter",
+    execute: "Ex.: Desenvolva a melhoria da tela inicial com Codex"
+  };
+  els.localSubmitButton.textContent = submitLabels[state.composerIntent] || "Enviar";
+  els.localInput.placeholder = placeholders[state.composerIntent] || placeholders.chat;
+  renderCommandBrief();
   updateComposerValidation();
 }
 
@@ -642,9 +742,14 @@ function renderIntegrations() {
     }
   ];
 
-  els.integrationsList.replaceChildren(...items.map((item) => {
+  const tickerItems = [...items, ...items];
+
+  els.integrationsList.replaceChildren(...tickerItems.map((item, index) => {
     const row = document.createElement("article");
     row.className = `integration-card ${item.state}`;
+    if (index >= items.length) {
+      row.setAttribute("aria-hidden", "true");
+    }
 
     const dot = document.createElement("span");
     dot.className = "integration-dot";
@@ -716,7 +821,8 @@ function renderCouncil() {
     councilSeatFor("openrouter", "OpenRouter", "Roteador de modelos", "Parecer externo via modelos roteados.")
   ];
 
-  els.aiCouncil.replaceChildren(...seats.map((seat) => {
+  const intro = renderCouncilIntroCard();
+  const cards = seats.map((seat) => {
     const item = document.createElement("article");
     item.className = `council-seat ${seat.state}`;
 
@@ -736,7 +842,35 @@ function renderCouncil() {
 
     item.append(header, state, summary);
     return item;
-  }));
+  });
+  els.aiCouncil.replaceChildren(intro, ...cards);
+}
+
+function renderCouncilIntroCard() {
+  const card = document.createElement("article");
+  card.className = "council-decision-card";
+
+  const label = document.createElement("span");
+  label.textContent = "Decisao";
+  const title = document.createElement("strong");
+  const copy = document.createElement("p");
+
+  if (!state.selectedJob) {
+    title.textContent = "Conselho sob demanda";
+    copy.textContent = "Acione Gemini, Grok e OpenRouter quando houver uma pergunta clara. AURA sintetiza, voce decide, Codex executa.";
+  } else if (state.selectedJob.mode === "analyze") {
+    title.textContent = `Demanda #${state.selectedJob.id} em analise`;
+    copy.textContent = "Use o Conselho para divergencias, riscos e recomendacao. A decisao final deve virar proximo passo ou task executavel.";
+  } else if (state.selectedJob.mode === "implement") {
+    title.textContent = `Demanda #${state.selectedJob.id} para execucao`;
+    copy.textContent = "Codex e o executor. Consulte o Conselho se precisar revisar risco, escopo ou alternativa antes de aprovar.";
+  } else {
+    title.textContent = `Demanda #${state.selectedJob.id} em conversa`;
+    copy.textContent = "Transforme a conversa em analise ou execucao quando houver um objetivo claro.";
+  }
+
+  card.append(label, title, copy);
+  return card;
 }
 
 function councilSeatFor(key, name, role, idleSummary) {
@@ -815,9 +949,9 @@ function councilSummaryForJob(job) {
     return "Gemini, Grok e OpenRouter entram como analistas; Codex permanece em espera ate haver decisao de execucao.";
   }
   if (job.mode === "implement") {
-    return "Codex e o executor desta demanda; Gemini e Grok continuam visiveis para revisao e contraponto.";
+    return "Codex e o executor desta demanda; Gemini, Grok e OpenRouter ficam disponiveis para revisao e contraponto.";
   }
-  return "Conselho em espera. Use Consultar conselho para pedir analise de Gemini e Grok.";
+  return "Conselho em espera. Use Consultar conselho para pedir analise dos provedores conectados.";
 }
 
 function renderTasks() {
@@ -950,11 +1084,15 @@ function renderJobs() {
     const meta = document.createElement("small");
     meta.textContent = `#${job.id} · ${labelForJobMode(job.mode)} · ${labelForPolicy(job.policyLevel)}`;
 
+    const stage = document.createElement("span");
+    stage.className = "job-stage";
+    stage.textContent = `${pipelineLabelForJob(job)} · ${nextStepForJob(job)}`;
+
     const status = document.createElement("span");
     status.className = `status-chip ${job.status}`;
     status.textContent = labelForJobStatus(job.status);
 
-    button.append(title, meta, status);
+    button.append(title, meta, stage, status);
     button.addEventListener("click", async () => {
       state.selectedJobId = job.id;
       await loadSelectedJob();
@@ -968,6 +1106,19 @@ function renderJobs() {
   renderJobDetail();
   renderActiveDemand();
   renderCouncil();
+}
+
+function pipelineLabelForJob(job) {
+  const labels = {
+    captured: "Capturada",
+    clarifying: "Esclarecendo",
+    council: "Conselho",
+    approval: "Aguardando voce",
+    executing: "Executando",
+    review: "Revisar",
+    done: "Concluida"
+  };
+  return labels[currentTimelineStep(job)] || "Em fluxo";
 }
 
 function renderDemandFilters() {
@@ -1067,6 +1218,16 @@ function renderSessionTabs() {
   });
 }
 
+function openSessionPanel(tabName) {
+  state.sessionTab = tabName;
+  renderSessionTabs();
+  const panel = document.querySelector(".session-panel");
+  if (panel) {
+    panel.open = true;
+    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+}
+
 function renderActiveDemand() {
   els.activeDemand.replaceChildren();
 
@@ -1075,12 +1236,12 @@ function renderActiveDemand() {
     empty.className = "active-demand-empty";
 
     const title = document.createElement("strong");
-    title.textContent = "Nenhuma demanda selecionada";
+    title.textContent = "Pronto para uma missao";
     const copy = document.createElement("p");
-    copy.textContent = "Use o comando abaixo para conversar, pedir analise do Conselho ou transformar uma ideia em demanda de desenvolvimento.";
-    const dashboard = renderMissionOverviewCards(null);
+    copy.textContent = "Escolha um ponto de partida ou fale com AURA. Toda demanda importante vira um fluxo rastreavel aqui.";
+    const starters = renderMissionStarters();
 
-    empty.append(title, copy, dashboard);
+    empty.append(title, copy, starters);
     els.activeDemand.append(empty);
     return;
   }
@@ -1104,8 +1265,6 @@ function renderActiveDemand() {
   const meta = document.createElement("p");
   meta.className = "active-demand-meta";
   meta.textContent = `Demanda #${job.id} · ${labelForJobMode(job.mode)} · ${labelForPolicy(job.policyLevel)}`;
-
-  const overview = renderMissionOverviewCards(job);
 
   const next = document.createElement("p");
   next.className = "active-demand-next";
@@ -1138,6 +1297,10 @@ function renderActiveDemand() {
         state.activeDemandTab = key;
         renderActiveDemand();
         if (key === "council") {
+          const drawer = document.querySelector(".support-drawer");
+          if (drawer) {
+            drawer.open = true;
+          }
           document.querySelector(".council-section").scrollIntoView({ behavior: "smooth", block: "nearest" });
         }
       });
@@ -1158,12 +1321,16 @@ function renderActiveDemand() {
   action.className = "secondary";
   action.textContent = "Ver no historico";
   action.addEventListener("click", () => {
+    const panel = document.querySelector(".jobs-panel");
+    if (panel) {
+      panel.open = true;
+    }
     document.querySelector(".jobs-panel").scrollIntoView({ behavior: "smooth", block: "start" });
   });
 
   if (state.activeDemandTab === "council") {
     const councilPanel = renderActiveDemandCouncil(job);
-    els.activeDemand.append(head, goal, meta, overview, tabs, councilPanel, action);
+    els.activeDemand.append(head, goal, meta, tabs, councilPanel, action);
     return;
   }
 
@@ -1178,7 +1345,7 @@ function renderActiveDemand() {
     list.className = "job-events";
     list.replaceChildren(...(state.selectedJobEvents.length ? state.selectedJobEvents.map(renderJobEvent) : []));
     technical.append(copy, list);
-    els.activeDemand.append(head, goal, meta, overview, tabs, technical, action);
+    els.activeDemand.append(head, goal, meta, tabs, technical, action);
     return;
   }
 
@@ -1193,26 +1360,70 @@ function renderActiveDemand() {
       empty.textContent = "Sem artefatos para esta demanda ainda.";
       panel.append(empty);
     }
-    els.activeDemand.append(head, goal, meta, overview, tabs, panel, action);
+    els.activeDemand.append(head, goal, meta, tabs, panel, action);
     return;
   }
 
   const timeline = renderDemandTimeline(job);
+  const details = document.createElement("details");
+  details.className = "mission-details";
+  const detailsSummary = document.createElement("summary");
+  detailsSummary.textContent = "Timeline e detalhes";
+  details.append(detailsSummary, timeline, facts);
+
   const security = renderSecurityBand(job);
   const alert = renderHumanFailure(job);
-  const councilDecision = renderCouncilDecisionCard();
-  els.activeDemand.append(head, goal, meta, overview, tabs);
-  els.activeDemand.append(timeline);
-  if (councilDecision) {
-    els.activeDemand.append(councilDecision);
-  }
+  els.activeDemand.append(head, goal, meta, next);
   if (security) {
     els.activeDemand.append(security);
   }
   if (alert) {
     els.activeDemand.append(alert);
   }
-  els.activeDemand.append(next, facts, action);
+  els.activeDemand.append(tabs, details, action);
+}
+
+function renderMissionStarters() {
+  const actions = document.createElement("div");
+  actions.className = "mission-starters";
+
+  const quickActions = [
+    ["chat", "Nova missao", "Aura, organize uma nova missao para mim"],
+    ["council", "Consultar conselho", "Avalie o cockpit atual e proponha melhorias"],
+    ["execute", "Executar com Codex", "Desenvolva a proxima melhoria do cockpit"]
+  ];
+
+  const nextTask = state.tasks.find((task) => task.status !== "done");
+  if (nextTask) {
+    quickActions.push(["task", "Retomar task", nextTask.title]);
+  }
+
+  for (const [intent, label, text] of quickActions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      if (intent === "task" && nextTask) {
+        openSessionPanel("tasks");
+        return;
+      }
+      setComposerIntent(intent, text);
+    });
+    actions.append(button);
+  }
+
+  return actions;
+}
+
+function setComposerIntent(intent, seedText = "") {
+  state.composerIntent = intent;
+  renderComposerIntents();
+  if (seedText) {
+    els.localInput.value = seedText;
+  }
+  els.voicePanel?.scrollIntoView({ behavior: "smooth", block: "center" });
+  els.localInput.focus();
+  updateComposerValidation();
 }
 
 function integrationForJob(job) {
@@ -1632,12 +1843,13 @@ function formatDurationMs(value) {
 function renderDemandTimeline(job) {
   const current = currentTimelineStep(job);
   const steps = [
-    ["received", "recebido"],
-    ["analyzing", "analisando"],
+    ["captured", "capturada"],
+    ["clarifying", "esclarecendo"],
     ["council", "conselho"],
-    ["approval", "aguardando aprovacao"],
+    ["approval", "aprovacao"],
     ["executing", "executando"],
-    ["result", "resultado"]
+    ["review", "revisao"],
+    ["done", "concluida"]
   ];
   const list = document.createElement("ol");
   list.className = "demand-timeline";
@@ -1653,8 +1865,11 @@ function renderDemandTimeline(job) {
 }
 
 function currentTimelineStep(job) {
-  if (["done", "failed", "cancelled"].includes(job.status)) {
-    return "result";
+  if (job.status === "done") {
+    return "done";
+  }
+  if (["failed", "cancelled"].includes(job.status)) {
+    return "review";
   }
   if (job.status === "awaiting_confirm" || job.status === "needs_input") {
     return "approval";
@@ -1668,7 +1883,10 @@ function currentTimelineStep(job) {
   if (job.mode === "implement") {
     return "approval";
   }
-  return "analyzing";
+  if (job.mode === "ask") {
+    return "clarifying";
+  }
+  return "captured";
 }
 
 function renderSecurityBand(job) {
@@ -2387,6 +2605,181 @@ function renderTools() {
   }));
 }
 
+function renderLocalFiles() {
+  if (!els.localFilesPanel) {
+    return;
+  }
+
+  const data = state.localFiles;
+  if (!data) {
+    els.localFilesPanel.replaceChildren(emptyParagraph("Permissao local ainda nao carregada."));
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.className = "local-files-header";
+
+  const rootSelect = document.createElement("select");
+  rootSelect.setAttribute("aria-label", "Raiz local permitida");
+  for (const root of data.roots || [data.root]) {
+    const option = document.createElement("option");
+    option.value = root.id;
+    option.textContent = `${root.label} · ${root.realPath}`;
+    option.selected = Number(root.id) === Number(data.root.id);
+    rootSelect.append(option);
+  }
+  rootSelect.addEventListener("change", async () => {
+    state.localFileRoot = Number(rootSelect.value);
+    state.localFilePath = ".";
+    await refreshLocalFiles();
+  });
+
+  const pathLabel = document.createElement("span");
+  pathLabel.textContent = data.path === "." ? data.root.realPath : `${data.root.realPath}/${data.path}`;
+  header.append(rootSelect, pathLabel);
+
+  const actions = document.createElement("div");
+  actions.className = "local-files-actions";
+  if (data.parent) {
+    const parent = document.createElement("button");
+    parent.type = "button";
+    parent.textContent = "Subir";
+    parent.addEventListener("click", async () => {
+      state.localFilePath = data.parent;
+      await refreshLocalFiles();
+    });
+    actions.append(parent);
+  }
+
+  const list = document.createElement("ul");
+  list.className = "local-files-list";
+  const entries = data.entries || [];
+  if (!entries.length) {
+    list.append(emptyListItem("Pasta vazia ou sem itens visiveis."));
+  } else {
+    for (const entry of entries) {
+      const item = document.createElement("li");
+      const main = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = `${entry.type === "directory" ? "Pasta" : "Arquivo"} · ${entry.name}`;
+      const meta = document.createElement("small");
+      meta.textContent = entry.type === "directory"
+        ? `Atualizada ${formatDateTime(entry.updatedAt)}`
+        : `${formatBytes(entry.size)} · ${formatDateTime(entry.updatedAt)}`;
+      main.append(name, meta);
+      item.append(main);
+      if (entry.type === "directory") {
+        const open = document.createElement("button");
+        open.type = "button";
+        open.textContent = "Abrir";
+        open.addEventListener("click", async () => {
+          state.localFilePath = entry.path || ".";
+          await refreshLocalFiles();
+        });
+        item.append(open);
+      }
+      list.append(item);
+    }
+  }
+
+  const note = document.createElement("p");
+  note.className = "permission-note";
+  note.textContent = "Leitura limitada as raizes configuradas em AURA_LOCAL_READ_ROOTS. AURA lista nomes, tipos, tamanhos e datas; nao abre conteudo de arquivo nesta tela.";
+
+  els.localFilesPanel.replaceChildren(header, actions, list, note);
+}
+
+function renderCodexActivity() {
+  if (!els.codexActivityPanel) {
+    return;
+  }
+
+  const data = state.codexActivity;
+  if (!data) {
+    els.codexActivityPanel.replaceChildren(emptyParagraph("Status do Codex ainda nao carregado."));
+    return;
+  }
+
+  const summary = document.createElement("div");
+  summary.className = "codex-activity-summary";
+  summary.append(
+    statusMetric("CLI", data.codex?.available ? "pronto" : "indisponivel", data.codex?.version || data.codex?.error || "sem versao"),
+    statusMetric("Ativas", formatInteger(data.active?.length || 0), "demandas com Codex"),
+    statusMetric("Recentes", formatInteger(data.recent?.length || 0), "historico Codex")
+  );
+
+  const activeSection = codexJobSection("Em andamento", data.active || []);
+  const recentSection = codexJobSection("Recentes", data.recent || []);
+
+  els.codexActivityPanel.replaceChildren(summary, activeSection, recentSection);
+}
+
+function codexJobSection(title, jobs) {
+  const section = document.createElement("section");
+  section.className = "codex-job-section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const list = document.createElement("ul");
+  list.className = "codex-job-list";
+  if (!jobs.length) {
+    list.append(emptyListItem(title === "Em andamento" ? "Nenhuma execucao Codex em andamento." : "Sem demandas Codex recentes."));
+  } else {
+    for (const job of jobs) {
+      const item = document.createElement("li");
+      const main = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = `#${job.id} · ${job.goal}`;
+      const meta = document.createElement("small");
+      const event = job.lastCodexEvent ? ` · ${job.lastCodexEvent.type}` : "";
+      meta.textContent = `${labelForJobStatus(job.status)} · ${job.workspace}${event}`;
+      main.append(name, meta);
+      const open = document.createElement("button");
+      open.type = "button";
+      open.textContent = "Abrir";
+      open.addEventListener("click", async () => {
+        state.selectedJobId = job.id;
+        state.demandFilter = "all";
+        await loadSelectedJob();
+        renderJobs();
+        const panel = document.querySelector(".jobs-panel");
+        if (panel) {
+          panel.open = true;
+        }
+      });
+      item.append(main, open);
+      list.append(item);
+    }
+  }
+  section.append(heading, list);
+  return section;
+}
+
+function statusMetric(label, value, detail) {
+  const item = document.createElement("article");
+  const small = document.createElement("small");
+  small.textContent = label;
+  const strong = document.createElement("strong");
+  strong.textContent = value;
+  const span = document.createElement("span");
+  span.textContent = detail;
+  item.append(small, strong, span);
+  return item;
+}
+
+function emptyParagraph(text) {
+  const empty = document.createElement("p");
+  empty.className = "empty-state";
+  empty.textContent = text;
+  return empty;
+}
+
+function emptyListItem(text) {
+  const empty = document.createElement("li");
+  empty.className = "empty";
+  empty.textContent = text;
+  return empty;
+}
+
 function renderCosts() {
   if ((!els.costsPanel && !els.topCostsPanel) || !state.costs) {
     return;
@@ -2686,6 +3079,16 @@ function formatInteger(value) {
   }).format(Number(value || 0));
 }
 
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / (1024 ** index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
 function totalTokensFromUsage(usage = {}) {
   return inputTokensFromUsage(usage) + outputTokensFromUsage(usage);
 }
@@ -2888,7 +3291,12 @@ function formatDateTime(value) {
   if (!value) {
     return "-";
   }
-  return new Date(`${value}Z`).toLocaleString("pt-BR", {
+  const raw = String(value);
+  const date = new Date(raw.includes("T") || raw.endsWith("Z") ? raw : `${raw}Z`);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return date.toLocaleString("pt-BR", {
     dateStyle: "short",
     timeStyle: "short"
   });
@@ -3106,6 +3514,12 @@ async function handleRealtimeToolCall(call) {
   if (call.name === "aura_create_development_demand") {
     return createDevelopmentDemandFromRealtime(args);
   }
+  if (call.name === "aura_list_local_folder") {
+    return listLocalFolderFromRealtime(args);
+  }
+  if (call.name === "aura_codex_activity") {
+    return codexActivityFromRealtime();
+  }
 
   return { ok: false, error: "Ferramenta desconhecida." };
 }
@@ -3179,6 +3593,95 @@ async function createTaskFromRealtime(args) {
   appendMessage("system", `Task criada pela voz: ${result.task.title}`);
   await refreshAll();
   return { ok: true, task: result.task };
+}
+
+async function listLocalFolderFromRealtime(args) {
+  const rootId = Number(args.root_id ?? args.rootId ?? args.root ?? 0);
+  const relativePath = String(args.path ?? args.relative_path ?? args.relativePath ?? ".").trim() || ".";
+
+  if (relativePath.startsWith("/") || relativePath.includes("..")) {
+    return {
+      ok: false,
+      error: "Use um caminho relativo dentro da raiz local permitida."
+    };
+  }
+
+  try {
+    state.localFileRoot = Number.isFinite(rootId) ? rootId : 0;
+    state.localFilePath = relativePath;
+    state.localFiles = await loadLocalFiles();
+    renderLocalFiles();
+    renderLocalContextSummary();
+    openSessionPanel("files");
+
+    const entries = state.localFiles.entries || [];
+    const directories = entries.filter((entry) => entry.type === "directory").slice(0, 10);
+    const files = entries.filter((entry) => entry.type !== "directory").slice(0, 10);
+    const spokenSummary = `Pasta local lida pela voz: ${entries.length} itens em ${state.localFiles.path === "." ? state.localFiles.root.realPath : state.localFiles.path}.`;
+    appendMessage("system", spokenSummary);
+
+    return {
+      ok: true,
+      root: state.localFiles.root.realPath,
+      path: state.localFiles.path,
+      totalEntries: entries.length,
+      truncated: Boolean(state.localFiles.truncated),
+      directories: directories.map(localEntrySummary),
+      files: files.map(localEntrySummary),
+      responseHint: "Responda em portugues, cite no maximo 6 itens e avise que a aba Arquivos foi aberta com os detalhes."
+    };
+  } catch (error) {
+    const message = humanizeJobMessage(error.message, error.details);
+    appendMessage("system", `Nao consegui listar a pasta por voz: ${message}`);
+    return { ok: false, error: message };
+  }
+}
+
+async function codexActivityFromRealtime() {
+  try {
+    state.codexActivity = await api("/api/codex/activity");
+    renderCodexActivity();
+    renderLocalContextSummary();
+    openSessionPanel("codex");
+
+    const active = state.codexActivity.active || [];
+    const recent = state.codexActivity.recent || [];
+    appendMessage("system", `Atividade Codex consultada pela voz: ${active.length} ativa(s), ${recent.length} recente(s).`);
+    return {
+      ok: true,
+      codexAvailable: Boolean(state.codexActivity.codex?.available),
+      codexVersion: state.codexActivity.codex?.version || "",
+      activeCount: active.length,
+      recentCount: recent.length,
+      active: active.slice(0, 5).map(codexJobSummary),
+      recent: recent.slice(0, 5).map(codexJobSummary),
+      responseHint: "Responda em portugues e diga que a aba Codex foi aberta com os detalhes."
+    };
+  } catch (error) {
+    const message = humanizeJobMessage(error.message, error.details);
+    appendMessage("system", `Nao consegui consultar o Codex por voz: ${message}`);
+    return { ok: false, error: message };
+  }
+}
+
+function localEntrySummary(entry) {
+  return {
+    name: entry.name,
+    type: entry.type,
+    path: entry.path,
+    size: entry.size ? formatBytes(entry.size) : null,
+    updatedAt: entry.updatedAt
+  };
+}
+
+function codexJobSummary(job) {
+  return {
+    id: job.id,
+    goal: job.goal,
+    status: job.status,
+    workspace: job.workspace,
+    updatedAt: job.updatedAt
+  };
 }
 
 async function developTaskFromRealtime(args) {

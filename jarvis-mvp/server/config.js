@@ -36,6 +36,14 @@ function intFromEnv(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
+function pathsFromEnv(name, fallback) {
+  const raw = String(process.env[name] || "").trim();
+  const values = raw
+    ? raw.split(/[;,]/).map((entry) => entry.trim()).filter(Boolean)
+    : fallback;
+  return [...new Set(values.map((entry) => path.resolve(entry)))];
+}
+
 export const config = {
   host: process.env.HOST || "127.0.0.1",
   port: intFromEnv("PORT", 5173),
@@ -51,6 +59,7 @@ export const config = {
   jobExportDir: process.env.JOB_EXPORT_DIR || EXPORT_DIR,
   jobTimeoutMs: intFromEnv("JOB_TIMEOUT_MS", 300000),
   codexTimeoutMs: intFromEnv("CODEX_TIMEOUT_MS", 900000),
+  localReadRoots: pathsFromEnv("AURA_LOCAL_READ_ROOTS", [path.resolve(ROOT_DIR, "..")]),
   databasePath: path.join(DATA_DIR, "aura.sqlite")
 };
 

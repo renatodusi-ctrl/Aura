@@ -34,16 +34,6 @@
         <button type="button" data-top-view="costs" aria-pressed="false">Controle de Custos</button>
       </nav>
 
-      <section class="integrations-carousel-panel" aria-labelledby="integrations-heading">
-        <div class="section-row">
-          <div>
-            <p class="eyebrow">Integracoes</p>
-            <h2 id="integrations-heading">IAs e servicos conectados</h2>
-          </div>
-        </div>
-        <div id="integrations-list" class="integrations-carousel" aria-live="polite"></div>
-      </section>
-
       <section class="costs-dashboard-panel panel secondary-surface" data-top-panel="costs" aria-labelledby="top-costs-heading" hidden>
         <div class="section-row">
           <div>
@@ -56,17 +46,7 @@
       </section>
 
       <section class="cockpit">
-        <section class="mission-column" aria-label="Fluxo principal da missao">
-          <section class="active-demand-panel" aria-labelledby="active-demand-heading">
-            <div class="panel-header mission-header">
-              <div>
-                <p class="eyebrow">Missao ativa</p>
-                <h2 id="active-demand-heading">Painel de trabalho</h2>
-              </div>
-            </div>
-            <div id="active-demand" class="active-demand" aria-live="polite"></div>
-          </section>
-
+        <section class="command-center" aria-label="Centro de comando AURA">
           <div class="voice-panel">
             <div class="panel-header">
               <div>
@@ -76,7 +56,12 @@
               <button id="voice-button" class="primary" type="button" data-connected="false">Conectar voz</button>
             </div>
 
-            <div id="conversation" class="conversation" aria-live="polite"></div>
+            <div id="command-brief" class="command-brief" aria-live="polite"></div>
+
+            <details class="transcript-drawer">
+              <summary>Transcricao da conversa</summary>
+              <div id="conversation" class="conversation" aria-live="polite"></div>
+            </details>
 
             <div class="composer-intents" aria-label="Intencao da conversa">
               <button type="button" data-composer-intent="chat" aria-pressed="true">Conversar</button>
@@ -94,30 +79,47 @@
             </form>
             <div id="attachment-tray" class="attachment-tray" aria-live="polite"></div>
           </div>
+
+          <section class="active-demand-panel" aria-labelledby="active-demand-heading">
+            <div class="panel-header mission-header">
+              <div>
+                <p class="eyebrow">Missao ativa</p>
+                <h2 id="active-demand-heading">Fluxo da demanda</h2>
+              </div>
+            </div>
+            <div id="active-demand" class="active-demand" aria-live="polite"></div>
+          </section>
         </section>
 
-        <aside class="side-panel">
-          <section class="council-section" aria-labelledby="council-heading">
-            <div class="section-row">
-              <h2 id="council-heading">Conselho de IAs</h2>
-            </div>
-            <div id="ai-council" class="ai-council" aria-live="polite"></div>
-          </section>
+        <details class="support-drawer">
+          <summary>Conselho, captura e diagnosticos</summary>
+          <aside class="side-panel">
+            <section class="council-section" aria-labelledby="council-heading">
+              <div class="section-row">
+                <h2 id="council-heading">Conselho de IAs</h2>
+              </div>
+              <div id="ai-council" class="ai-council" aria-live="polite"></div>
+            </section>
 
-          <section>
-            <div class="section-row">
-              <h2>Tela</h2>
-              <button id="screen-button" type="button">Capturar</button>
-            </div>
-            <video id="screen-video" autoplay muted playsinline hidden></video>
-            <button id="stop-screen-button" class="secondary" type="button" hidden>Parar captura</button>
-          </section>
-        </aside>
+            <section>
+              <div class="section-row">
+                <h2>Tela</h2>
+                <button id="screen-button" type="button">Capturar</button>
+              </div>
+              <video id="screen-video" autoplay muted playsinline hidden></video>
+              <button id="stop-screen-button" class="secondary" type="button" hidden>Parar captura</button>
+            </section>
+          </aside>
+        </details>
       </section>
 
-      <section class="jobs-panel panel secondary-surface" aria-labelledby="jobs-heading">
+      <details class="jobs-panel panel secondary-surface" aria-labelledby="jobs-heading">
+        <summary>Fila operacional</summary>
         <div class="section-row">
-          <h2 id="jobs-heading">Historico de demandas</h2>
+          <div>
+            <p class="eyebrow">Fila operacional</p>
+            <h2 id="jobs-heading">Demandas e proximos passos</h2>
+          </div>
           <button id="jobs-refresh-button" type="button">Atualizar</button>
         </div>
         <div id="demand-history-summary" class="demand-history-summary" aria-live="polite"></div>
@@ -132,9 +134,10 @@
           <ul id="job-list" class="job-list"></ul>
           <article id="job-detail" class="job-detail" aria-live="polite"></article>
         </div>
-      </section>
+      </details>
 
-      <section class="session-panel panel secondary-surface" aria-labelledby="session-heading">
+      <details class="session-panel panel secondary-surface" aria-labelledby="session-heading">
+        <summary>Contexto local</summary>
         <div class="section-row">
           <h2 id="session-heading">Contexto local</h2>
           <div class="session-tabs" role="tablist" aria-label="Contexto local">
@@ -142,6 +145,8 @@
             <button type="button" role="tab" data-session-tab="routine" aria-selected="false">Rotina</button>
             <button type="button" role="tab" data-session-tab="memory" aria-selected="false">Memoria</button>
             <button type="button" role="tab" data-session-tab="costs" aria-selected="false">Controle de Custos</button>
+            <button type="button" role="tab" data-session-tab="files" aria-selected="false">Arquivos</button>
+            <button type="button" role="tab" data-session-tab="codex" aria-selected="false">Codex</button>
             <button type="button" role="tab" data-session-tab="tools" aria-selected="false">Ferramentas</button>
             <button type="button" role="tab" data-session-tab="events" aria-selected="false">Eventos</button>
           </div>
@@ -185,6 +190,22 @@
           <div id="costs-panel" class="costs-panel" aria-live="polite"></div>
         </div>
 
+        <div class="workspace-tab" data-session-panel="files" role="tabpanel" hidden>
+          <div class="section-row">
+            <h2>Arquivos locais</h2>
+            <button id="local-files-refresh-button" type="button">Atualizar</button>
+          </div>
+          <div id="local-files-panel" class="local-files-panel" aria-live="polite"></div>
+        </div>
+
+        <div class="workspace-tab" data-session-panel="codex" role="tabpanel" hidden>
+          <div class="section-row">
+            <h2>Codex em andamento</h2>
+            <button id="codex-activity-refresh-button" type="button">Atualizar</button>
+          </div>
+          <div id="codex-activity-panel" class="codex-activity-panel" aria-live="polite"></div>
+        </div>
+
         <div class="workspace-tab" data-session-panel="tools" role="tabpanel" hidden>
           <h2>Ferramentas</h2>
           <ul id="tools-list" class="tools"></ul>
@@ -193,6 +214,18 @@
         <div class="workspace-tab" data-session-panel="events" role="tabpanel" hidden>
           <h2>Eventos</h2>
           <ul id="event-log" class="events"></ul>
+        </div>
+      </details>
+
+      <section class="integrations-carousel-panel" aria-labelledby="integrations-heading">
+        <div class="section-row">
+          <div>
+            <p class="eyebrow">Integracoes</p>
+            <h2 id="integrations-heading">IAs e servicos conectados</h2>
+          </div>
+        </div>
+        <div class="integrations-ticker">
+          <div id="integrations-list" class="integrations-carousel" aria-live="polite"></div>
         </div>
       </section>
     </main>
