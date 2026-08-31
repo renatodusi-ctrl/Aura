@@ -29,9 +29,9 @@ import {
 import { getLocalContext, listTools, runTool } from "./tools.js";
 import { evaluateJobPolicy, normalizePolicyLevel, POLICY_LEVELS } from "./policy.js";
 import { createSessionToken, isAllowedOrigin, isProtectedApiPath, validateSessionRequest } from "./httpSecurity.js";
-import { cancelJobProcess } from "./supervisor.js";
+import { activeJobProcessSummary, cancelJobProcess } from "./supervisor.js";
 import { detectCodex, runCodexAsk, runCodexImplement } from "./codexAdapter.js";
-import { analystCircuitState, buildEvidenceBrief, cancelAnalystJobProcess, runAnalysts } from "./analystAdapter.js";
+import { activeAnalystProcessSummary, analystCircuitState, buildEvidenceBrief, cancelAnalystJobProcess, runAnalysts } from "./analystAdapter.js";
 import { synthesizeDebate } from "./debateSynthesizer.js";
 import { handleVoiceIntent } from "./voiceIntents.js";
 import { buildVoiceHealth } from "./voiceHealth.js";
@@ -55,7 +55,9 @@ const contentTypes = {
 
 const JOB_API_MODES = new Set(["ask", "analyze", "implement"]);
 const TASK_EXECUTORS = new Set(["codex", "council", "codex-council"]);
+const PROVIDER_PREFLIGHT_TTL_MS = 10000;
 const sessionToken = createSessionToken();
+let providerPreflightCache = null;
 ensureRuntime();
 initMemory();
 
@@ -115,6 +117,10 @@ async function route(req, res) {
       jobExportDir: config.jobExportDir,
       providers,
       memory: getStatus(),
+      operations: {
+        jobProcesses: activeJobProcessSummary(),
+        analystProcesses: activeAnalystProcessSummary()
+      },
       tools: listTools()
     });
   }
@@ -1936,6 +1942,11 @@ function realtimeSessionPayload() {
 }
 
 async function getProviderPreflight() {
+  const now = Date.now();
+  if (providerPreflightCache && now - providerPreflightCache.createdAt < PROVIDER_PREFLIGHT_TTL_MS) {
+    return providerPreflightCache.providers;
+  }
+
   const providers = {
     gemini: {
       name: "gemini",
@@ -2006,7 +2017,12 @@ async function getProviderPreflight() {
     }];
   }));
 
-  return Object.fromEntries(entries);
+  const payload = Object.fromEntries(entries);
+  providerPreflightCache = {
+    createdAt: now,
+    providers: payload
+  };
+  return payload;
 }
 
 function runProviderProbe(command, args, timeoutMs) {

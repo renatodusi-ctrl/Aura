@@ -289,6 +289,18 @@ export function hasActiveAnalystJobProcess(jobId) {
   return Boolean(active && active.size);
 }
 
+export function activeAnalystProcessSummary() {
+  const jobs = [...activeAnalystProcesses.entries()].map(([jobId, processes]) => ({
+    jobId,
+    count: processes.size,
+    cancelled: [...processes].filter((processInfo) => processInfo.cancelled).length
+  }));
+  return {
+    total: jobs.reduce((sum, job) => sum + job.count, 0),
+    jobs
+  };
+}
+
 export function analystCircuitState(name) {
   const state = analystCircuits.get(name);
   if (!state) {

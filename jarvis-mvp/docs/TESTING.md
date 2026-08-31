@@ -8,6 +8,22 @@ scripts\verify.ps1
 
 This checks JavaScript syntax with Node.
 
+## Presence SLO
+
+```powershell
+npm run soak:presence
+```
+
+The presence soak starts AURA on a free local port, samples `/api/status` and `/api/now`, cancels a hanging local process, calculates p50/p95 latency, and writes `exports/presence-slo-report.json`.
+
+The fast SLO gate also runs inside `npm run verify` with fewer samples. The P0 targets are:
+
+- `/api/status` p95 <= 250 ms.
+- `/api/now` p95 <= 250 ms.
+- cancellation p95 <= 1500 ms.
+- zero stuck local job processes after cancellation.
+- zero inconsistent status/now snapshots.
+
 ## Manual Smoke Test
 
 1. Run `scripts\run.ps1`.

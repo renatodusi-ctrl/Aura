@@ -165,6 +165,20 @@ export function hasActiveJobProcess(jobId) {
   return activeProcesses.has(Number(jobId));
 }
 
+export function activeJobProcessSummary() {
+  const jobs = [...activeProcesses.values()].map((active) => ({
+    jobId: active.jobId,
+    timedOut: active.timedOut,
+    cancelled: active.cancelled,
+    stdoutBytes: active.stdout.length,
+    stderrBytes: active.stderr.length
+  }));
+  return {
+    total: jobs.length,
+    jobs
+  };
+}
+
 function filteredEnv(extraEnv = {}) {
   return filteredToolEnv(extraEnv);
 }
