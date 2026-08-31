@@ -178,6 +178,14 @@ export async function detectAnalyst(name, { bin } = {}) {
 export async function healthCheckAnalyst(name, { bin, cwd = process.cwd(), timeoutMs = HEALTH_CHECK_TIMEOUT_MS, jobId = null } = {}) {
   const circuit = analystCircuitState(name);
   if (circuit.open) {
+    if (jobId) {
+      recordJobEvent(jobId, "analyst.circuit_open", `${displayName(name)} circuit breaker is open.`, {
+        name,
+        reason: circuit.reason,
+        retryAt: circuit.retryAt,
+        remainingMs: circuit.remainingMs
+      });
+    }
     return {
       name,
       detected: true,
@@ -218,6 +226,16 @@ export async function healthCheckAnalyst(name, { bin, cwd = process.cwd(), timeo
   const reason = usable ? "" : reasonForAnalystFailure(name, result, output, normalized);
   if (!usable && result.cancelled !== true) {
     openAnalystCircuit(name, reason, { stage: "health-check", timeoutMs });
+  }
+  if (!usable && jobId) {
+    recordAnalystOutcome(jobId, name, outcomeForResult(result, reason), {
+      stage: "health-check",
+      reason,
+      exitCode: result.exitCode,
+      timedOut: result.timedOut,
+      validSchema: normalized.validSchema,
+      circuit: analystCircuitState(name)
+    });
   }
 
   return {
@@ -338,6 +356,7 @@ export async function runAnalysts({
   const analystResults = [];
   const usableAnalysts = [];
   const totalTimeoutMs = normalizeTimeoutMs(timeoutMs || job.timeoutMs);
+  const providerTimeoutMs = perProviderTimeout(totalTimeoutMs, selected.length);
   const deadline = Date.now() + totalTimeoutMs;
   let cancelled = false;
   for (const name of selected) {
@@ -358,7 +377,7 @@ export async function runAnalysts({
     const health = await healthCheckAnalyst(name, {
       bin: detection.bin,
       cwd: job.workspace,
-      timeoutMs: remainingTimeout(deadline, healthCheckTimeout(totalTimeoutMs)),
+      timeoutMs: remainingTimeout(deadline, healthCheckTimeout(providerTimeoutMs)),
       jobId: job.id
     });
     recordJobEvent(job.id, "analyst.health_checked", `${displayName(name)} usability check completed.`, health);
@@ -389,7 +408,7 @@ export async function runAnalysts({
         detection.bin,
         config.args(prompt, { promptFile }),
         job.workspace,
-        remainingTimeout(deadline, totalTimeoutMs),
+        remainingTimeout(deadline, providerTimeoutMs),
         envForAnalyst(name),
         { jobId: job.id, name, stage: "initial-analysis" }
       );
@@ -397,6 +416,10 @@ export async function runAnalysts({
       removeAnalystPromptFile(promptFile);
     }
     if (result.cancelled) {
+      recordAnalystOutcome(job.id, name, "cancelled", {
+        stage: "initial-analysis",
+        signal: result.signal
+      });
       cancelled = true;
       break;
     }
@@ -405,6 +428,15 @@ export async function runAnalysts({
     const error = result.exitCode === 0 && normalized.validSchema
       ? null
       : reasonForAnalystFailure(name, result, output, normalized);
+    if (error && !result.cancelled) {
+      openAnalystCircuit(name, error, {
+        stage: "initial-analysis",
+        timeoutMs: providerTimeoutMs,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        validSchema: normalized.validSchema
+      });
+    }
 
     createJobArtifact(job.id, {
       kind: "analyst-response",
@@ -422,6 +454,16 @@ export async function runAnalysts({
     });
 
     analystResults.push({ name, detection: health, result, response: normalized, error });
+    recordAnalystOutcome(job.id, name, outcomeForResult(result, error), {
+      stage: "initial-analysis",
+      exitCode: result.exitCode,
+      signal: result.signal,
+      timedOut: result.timedOut,
+      cancelled: result.cancelled,
+      validSchema: normalized.validSchema,
+      confidence: normalized.confidence,
+      error
+    });
     recordJobEvent(job.id, "analyst.finished", `${displayName(name)} finished.`, {
       name,
       exitCode: result.exitCode,
@@ -471,7 +513,7 @@ export async function runAnalysts({
             previous.detection.bin || bins[name] || config.bin,
             config.args(prompt, { promptFile }),
             job.workspace,
-            remainingTimeout(deadline, totalTimeoutMs),
+            remainingTimeout(deadline, providerTimeoutMs),
             envForAnalyst(name),
             { jobId: job.id, name, stage: `dissent-review:${round}` }
           );
@@ -479,6 +521,11 @@ export async function runAnalysts({
           removeAnalystPromptFile(promptFile);
         }
         if (result.cancelled) {
+          recordAnalystOutcome(job.id, name, "cancelled", {
+            stage: `dissent-review:${round}`,
+            round,
+            signal: result.signal
+          });
           cancelled = true;
           break;
         }
@@ -535,6 +582,18 @@ export async function runAnalysts({
 
   const successful = analystResults.filter((entry) => entry.response && !entry.error);
   const failed = analystResults.filter((entry) => entry.error);
+  const telemetry = analystTelemetry(selected, usableAnalysts, analystResults, {
+    totalTimeoutMs,
+    providerTimeoutMs,
+    cancelled,
+    degraded: successful.length > 0 && failed.length > 0
+  });
+  createJobArtifact(job.id, {
+    kind: "analyst-telemetry",
+    label: "Council telemetry",
+    content: JSON.stringify(telemetry, null, 2),
+    metadata: telemetry
+  });
   const status = successful.length ? "done" : "needs_input";
   const failureSummary = analystFailureSummary(selected, usableAnalysts, failed);
   updateJobStatus(job.id, status, {
@@ -548,6 +607,7 @@ export async function runAnalysts({
       failedDestinations: failed.map((entry) => entry.name),
       roundsRequested: requestedRounds,
       roundsCompleted: Math.max(0, ...successful.map((entry) => entry.round || 1)),
+      telemetry,
       lastCompletedAt: new Date().toISOString(),
       recovery: successful.length ? "none" : "retry_or_skip"
     }
@@ -559,6 +619,67 @@ export async function runAnalysts({
     analysts: analystResults,
     artifacts: listJobArtifacts(job.id),
     events: listJobEvents(job.id)
+  };
+}
+
+function perProviderTimeout(totalTimeoutMs, selectedCount) {
+  const count = Math.max(1, Number.parseInt(selectedCount, 10) || 1);
+  const total = normalizeTimeoutMs(totalTimeoutMs);
+  return Math.max(1000, Math.floor(total / count));
+}
+
+function outcomeForResult(result = {}, error = null) {
+  if (result.cancelled) {
+    return "cancelled";
+  }
+  if (result.timedOut) {
+    return "timed_out";
+  }
+  if (error || result.exitCode !== 0) {
+    return "failed";
+  }
+  return "completed";
+}
+
+function recordAnalystOutcome(jobId, name, outcome, data = {}) {
+  const messages = {
+    completed: `${displayName(name)} completed successfully.`,
+    failed: `${displayName(name)} failed.`,
+    timed_out: `${displayName(name)} timed out.`,
+    cancelled: `${displayName(name)} was cancelled.`,
+    circuit_open: `${displayName(name)} circuit breaker is open.`
+  };
+  recordJobEvent(jobId, `analyst.${outcome}`, messages[outcome] || `${displayName(name)} changed state.`, {
+    name,
+    outcome,
+    ...data
+  });
+}
+
+function analystTelemetry(selected, usableAnalysts, analystResults, context = {}) {
+  const providers = selected.map((name) => {
+    const attempts = analystResults.filter((entry) => entry.name === name);
+    const last = attempts.at(-1);
+    const error = last?.error || null;
+    const result = last?.result || last?.detection?.check || {};
+    return {
+      name,
+      usable: usableAnalysts.includes(name),
+      attempts: attempts.length,
+      outcome: last ? outcomeForResult(result, error) : "skipped",
+      error: error ? redactText(error) : null,
+      timedOut: Boolean(result.timedOut),
+      cancelled: Boolean(result.cancelled),
+      circuit: analystCircuitState(name)
+    };
+  });
+  return {
+    requested: selected,
+    usable: usableAnalysts,
+    successful: analystResults.filter((entry) => entry.response && !entry.error).map((entry) => entry.name),
+    failed: analystResults.filter((entry) => entry.error).map((entry) => entry.name),
+    ...context,
+    providers
   };
 }
 
