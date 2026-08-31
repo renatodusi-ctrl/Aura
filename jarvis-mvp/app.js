@@ -1,5 +1,10 @@
 import { RealtimeClient } from "./realtime.js";
 import { buildSpeakableNow, shouldNarrateNow } from "./nowNarration.js";
+import {
+  buildCouncilImplementationPlan,
+  implementationEvidenceFromArtifacts,
+  implementationGoalFromPlan
+} from "./councilPlan.js";
 
 const state = {
   status: null,
@@ -1492,12 +1497,16 @@ function renderActiveDemand() {
 
   const security = renderSecurityBand(job);
   const alert = renderHumanFailure(job);
+  const implementationEvidence = renderImplementationEvidence(job);
   els.activeDemand.append(head, goal, meta, next);
   if (security) {
     els.activeDemand.append(security);
   }
   if (alert) {
     els.activeDemand.append(alert);
+  }
+  if (implementationEvidence) {
+    els.activeDemand.append(implementationEvidence);
   }
   els.activeDemand.append(tabs, details, action);
 }
@@ -1762,6 +1771,8 @@ function renderCouncilDecisionCard() {
   if (!synthesis) {
     return null;
   }
+  const job = state.selectedJob;
+  const plan = job ? buildCouncilImplementationPlan(job, synthesis) : null;
 
   const card = document.createElement("section");
   card.className = "council-decision";
@@ -1780,7 +1791,10 @@ function renderCouncilDecisionCard() {
   appendFact(facts, "Criterio", progressiveDebateLabel(synthesis));
 
   card.append(label, recommendation, facts);
-  const actions = renderCouncilDecisionActions(synthesis);
+  if (plan) {
+    card.append(renderCouncilImplementationPlanPreview(plan));
+  }
+  const actions = renderCouncilDecisionActions(synthesis, plan);
   if (actions) {
     card.append(actions);
   }
@@ -1807,7 +1821,43 @@ function progressiveDebateLabel(synthesis) {
   return "sem rodada extra";
 }
 
-function renderCouncilDecisionActions(synthesis) {
+function renderCouncilImplementationPlanPreview(plan) {
+  const preview = document.createElement("section");
+  preview.className = "council-plan-preview";
+  preview.setAttribute("aria-label", "Plano estruturado da decisao do Conselho");
+
+  const title = document.createElement("strong");
+  title.textContent = "Plano acionavel";
+  const summary = document.createElement("p");
+  summary.textContent = plan.summary;
+
+  const grid = document.createElement("div");
+  grid.className = "council-plan-grid";
+  grid.append(
+    compactList("Passos", plan.steps),
+    compactList("Arquivos provaveis", plan.likelyFiles.length ? plan.likelyFiles : ["Codex deve confirmar o arquivo antes de editar."]),
+    compactList("Verificacoes", plan.verification)
+  );
+
+  preview.append(title, summary, grid);
+  return preview;
+}
+
+function compactList(titleText, items) {
+  const section = document.createElement("div");
+  const title = document.createElement("span");
+  title.textContent = titleText;
+  const list = document.createElement("ul");
+  for (const item of items || []) {
+    const entry = document.createElement("li");
+    entry.textContent = item;
+    list.append(entry);
+  }
+  section.append(title, list);
+  return section;
+}
+
+function renderCouncilDecisionActions(synthesis, plan) {
   const job = state.selectedJob;
   if (!job || job.mode !== "analyze" || !synthesis?.recommendation) {
     return null;
@@ -1833,41 +1883,54 @@ function renderCouncilDecisionActions(synthesis) {
       }
     });
   });
-  actions.append(implement);
+
+  const review = document.createElement("button");
+  review.type = "button";
+  review.textContent = "Revisar plano";
+  review.addEventListener("click", () => {
+    document.querySelector(".council-plan-preview")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+
+  const secondOpinion = document.createElement("button");
+  secondOpinion.type = "button";
+  secondOpinion.textContent = "Pedir segunda opiniao";
+  secondOpinion.addEventListener("click", async () => {
+    await withBusyButton(secondOpinion, "Consultando", async () => {
+      await runAnalystConsultation(job, defaultAnalystConsent(), {
+        constraints: ["Revisar o plano estruturado antes de executar qualquer mudanca."],
+        files: plan?.likelyFiles || [],
+        findings: plan?.steps || []
+      }, 2);
+    });
+  });
+
+  actions.append(implement, review, secondOpinion);
   return actions;
 }
 
 async function createImplementationFromCouncil(sourceJob, synthesis) {
+  const councilPlan = buildCouncilImplementationPlan(sourceJob, synthesis);
   return api("/api/jobs", {
     method: "POST",
     body: {
-      goal: implementationGoalFromSynthesis(sourceJob, synthesis),
+      goal: implementationGoalFromPlan(sourceJob, councilPlan),
       mode: "implement",
       requestedBy: "text",
       policyLevel: "write",
       metadata: {
         source: "council-decision",
         sourceJobId: sourceJob.id,
-        plan: synthesis.recommendation,
-        risk: synthesis.risks?.length
-          ? `Riscos levantados pelo Conselho: ${synthesis.risks.map((risk) => risk.text || risk).join(" | ")}`
+        councilPlan,
+        plan: councilPlan.summary,
+        planSummary: councilPlan.steps.join("\n"),
+        risk: councilPlan.risks?.length
+          ? `Riscos levantados pelo Conselho: ${councilPlan.risks.join(" | ")}`
           : "Implementacao criada a partir de sintese do Conselho; exige confirmacao visual.",
-        likelyFiles: []
+        likelyFiles: councilPlan.likelyFiles,
+        verification: councilPlan.verification
       }
     }
   });
-}
-
-function implementationGoalFromSynthesis(sourceJob, synthesis) {
-  return [
-    `Implementar a Decisao do Conselho da demanda #${sourceJob.id}.`,
-    "",
-    `Objetivo original: ${sourceJob.goal}`,
-    "",
-    `Plano aprovado para revisar: ${synthesis.recommendation}`,
-    "",
-    "Antes de alterar arquivos, mantenha o escopo pequeno e preserve a confirmacao visual do cockpit."
-  ].join("\n");
 }
 
 function latestDebateSynthesis() {
@@ -2087,6 +2150,15 @@ function renderSecurityBand(job) {
     document.querySelector(".jobs-panel").scrollIntoView({ behavior: "smooth", block: "start" });
   });
 
+  const source = sourceJobIdForImplementation(job);
+  if (source) {
+    const back = document.createElement("button");
+    back.type = "button";
+    back.textContent = "Voltar a decisao original";
+    back.addEventListener("click", () => goToOriginalCouncilDecision(source));
+    controls.append(back);
+  }
+
   controls.append(approve, deny, details);
   panel.append(title, facts, controls);
   return panel;
@@ -2184,6 +2256,7 @@ function renderJobDetail() {
   appendFact(facts, "Timeout", `${job.timeoutMs} ms`);
 
   const approval = renderImplementationApproval(job);
+  const implementationEvidence = renderImplementationEvidence(job);
   const analystConsent = renderAnalystConsent(job);
   const debateControls = renderDebateControls(job);
   const routineDraftControls = renderRoutineDraftControls(job);
@@ -2240,6 +2313,9 @@ function renderJobDetail() {
   if (approval) {
     els.jobDetail.append(approval);
   }
+  if (implementationEvidence) {
+    els.jobDetail.append(implementationEvidence);
+  }
   if (analystConsent) {
     els.jobDetail.append(analystConsent);
   }
@@ -2280,11 +2356,84 @@ function renderImplementationApproval(job) {
   const panel = document.createElement("div");
   panel.className = "approval-summary";
   const metadata = job.metadata || {};
-  appendApprovalItem(panel, "Plano", metadata.plan || metadata.planSummary || job.goal);
+  appendApprovalItem(panel, "Plano", metadata.planSummary || metadata.plan || job.goal);
   appendApprovalItem(panel, "Risco", metadata.risk || riskForPolicy(job.policyLevel));
   const likelyFiles = Array.isArray(metadata.likelyFiles) ? metadata.likelyFiles.join("\n") : metadata.likelyFiles;
   appendApprovalItem(panel, "Arquivos provaveis", likelyFiles || "Nao informado");
+  const verification = Array.isArray(metadata.verification) ? metadata.verification.join("\n") : metadata.verification;
+  if (verification) {
+    appendApprovalItem(panel, "Verificacoes", verification);
+  }
+  const source = sourceJobIdForImplementation(job);
+  if (source) {
+    const controls = document.createElement("div");
+    controls.className = "approval-actions";
+    const back = document.createElement("button");
+    back.type = "button";
+    back.textContent = "Voltar a decisao original";
+    back.addEventListener("click", () => goToOriginalCouncilDecision(source));
+    controls.append(back);
+    panel.append(controls);
+  }
   return panel;
+}
+
+function renderImplementationEvidence(job) {
+  if (job.mode !== "implement" || job.metadata?.source !== "council-decision") {
+    return null;
+  }
+
+  const evidence = implementationEvidenceFromArtifacts(job, state.selectedJobArtifacts);
+  if (!evidence.hasEvidence) {
+    return null;
+  }
+
+  const panel = document.createElement("section");
+  panel.className = "implementation-evidence";
+  const title = document.createElement("strong");
+  title.textContent = "Evidencias de implementacao";
+  const result = document.createElement("p");
+  result.textContent = evidence.result;
+
+  const facts = document.createElement("dl");
+  facts.className = "implementation-evidence-facts";
+  appendFact(facts, "Resultado", evidence.outcome);
+  appendFact(facts, "Arquivos", evidence.changedFiles.length ? evidence.changedFiles.join(", ") : "Nenhum arquivo alterado registrado ainda.");
+  appendFact(facts, "Testes", evidence.tests.length ? evidence.tests.map((test) => `${test.command}: ${test.status}`).join(" | ") : "Sem teste registrado ainda.");
+  appendFact(facts, "Retomada", evidence.resumePath);
+
+  const actions = document.createElement("div");
+  actions.className = "implementation-evidence-actions";
+  const source = evidence.sourceJobId || sourceJobIdForImplementation(job);
+  if (source) {
+    const back = document.createElement("button");
+    back.type = "button";
+    back.textContent = "Voltar a decisao original";
+    back.addEventListener("click", () => goToOriginalCouncilDecision(source));
+    actions.append(back);
+  }
+  const artifacts = document.createElement("button");
+  artifacts.type = "button";
+  artifacts.textContent = "Revisar artefatos";
+  artifacts.addEventListener("click", () => {
+    state.activeDemandTab = "artifacts";
+    renderActiveDemand();
+  });
+  actions.append(artifacts);
+
+  panel.append(title, result, facts, actions);
+  return panel;
+}
+
+function sourceJobIdForImplementation(job) {
+  return job?.metadata?.sourceJobId || job?.metadata?.councilPlan?.sourceJobId || null;
+}
+
+async function goToOriginalCouncilDecision(sourceJobId) {
+  state.selectedJobId = Number(sourceJobId);
+  state.activeDemandTab = "council";
+  await refreshAll();
+  document.querySelector(".active-demand-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function renderAnalystConsent(job) {
