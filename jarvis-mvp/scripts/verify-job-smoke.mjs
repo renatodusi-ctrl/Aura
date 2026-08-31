@@ -92,6 +92,38 @@ try {
   assert.match(sessionContinuity.data.reply, /Preferencia recente:/);
   assert.doesNotMatch(sessionContinuity.data.reply, /sk-proj-smoke-secret/);
 
+  const persistentPreference = await request("/api/memories", {
+    method: "POST",
+    headers,
+    body: {
+      kind: "preference",
+      content: "prefiro briefing objetivo sem OPENAI_API_KEY=sk-proj-persistent-secret"
+    }
+  });
+  assert.equal(persistentPreference.status, 201);
+  assert.equal(persistentPreference.data.memory.kind, "preference");
+  assert.doesNotMatch(persistentPreference.data.memory.content, /sk-proj-persistent-secret/);
+
+  const editedPreference = await request(`/api/memories/${persistentPreference.data.memory.id}`, {
+    method: "PATCH",
+    headers,
+    body: {
+      kind: "preference",
+      content: "prefiro briefing executivo com proximas acoes"
+    }
+  });
+  assert.equal(editedPreference.status, 200);
+  assert.match(editedPreference.data.memory.content, /proximas acoes/);
+  const nowWithPersistentMemory = await request("/api/now", { headers });
+  assert.ok(nowWithPersistentMemory.data.now.persistentMemory.preferences.some((memory) => memory.id === persistentPreference.data.memory.id));
+
+  const deletedPreference = await request(`/api/memories/${persistentPreference.data.memory.id}?confirm=true`, {
+    method: "DELETE",
+    headers
+  });
+  assert.equal(deletedPreference.status, 200);
+  assert.equal(deletedPreference.data.output.deleted, true);
+
   const listed = await request("/api/jobs?limit=5", { headers });
   assert.equal(listed.status, 200);
   assert.ok(listed.data.jobs.some((job) => job.id === created.data.job.id));

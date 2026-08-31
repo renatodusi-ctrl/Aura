@@ -1333,7 +1333,22 @@ function renderMemories() {
   els.memoryList.replaceChildren(...state.memories.map((memory) => {
     const item = document.createElement("li");
     const content = document.createElement("span");
-    content.textContent = memory.content;
+    content.textContent = `${labelForMemoryKind(memory.kind)}: ${memory.content}`;
+
+    const editButton = iconButton("Editar", "Editar memoria");
+    editButton.addEventListener("click", async () => {
+      const next = prompt("Atualizar memoria local:", memory.content);
+      if (next === null) {
+        return;
+      }
+      await withBusyButton(editButton, "...", async () => {
+        await api(`/api/memories/${memory.id}`, {
+          method: "PATCH",
+          body: { kind: memory.kind, content: next }
+        });
+        await refreshAll();
+      });
+    });
 
     const deleteButton = iconButton("×", "Excluir memoria");
     deleteButton.addEventListener("click", async () => {
@@ -1346,9 +1361,19 @@ function renderMemories() {
       });
     });
 
-    item.append(content, deleteButton);
+    item.append(content, editButton, deleteButton);
     return item;
   }));
+}
+
+function labelForMemoryKind(kind) {
+  const labels = {
+    preference: "Preferencia",
+    project: "Projeto",
+    decision: "Decisao",
+    note: "Nota"
+  };
+  return labels[kind] || "Memoria";
 }
 
 function renderJobs() {
@@ -3791,13 +3816,14 @@ function canRunAnalystsJob(job) {
 function analystContext(job) {
   const metadata = job.metadata || {};
   const visualEvidence = screenEvidenceContextForJob();
+  const persistentEvidence = persistentMemoryContextForCouncil();
   const findings = Array.isArray(metadata.findings)
     ? metadata.findings
     : metadata.findings ? [String(metadata.findings)] : [];
   return {
     constraints: metadata.constraints,
     files: metadata.files || metadata.likelyFiles,
-    findings: [...findings, ...visualEvidence],
+    findings: [...findings, ...visualEvidence, ...persistentEvidence],
     attempted: metadata.attempted
   };
 }
@@ -3808,6 +3834,13 @@ function screenEvidenceContextForJob() {
     .map((artifact) => artifact.content || artifact.metadata?.summary || "")
     .filter(Boolean)
     .map((content) => `Evidencia visual consentida considerada: ${content}`);
+}
+
+function persistentMemoryContextForCouncil() {
+  return state.memories
+    .filter((memory) => ["preference", "project", "decision"].includes(memory.kind))
+    .slice(0, 6)
+    .map((memory) => `Memoria persistente (${labelForMemoryKind(memory.kind)} #${memory.id}) considerada: ${memory.content}`);
 }
 
 function buildAnalystPreview(job) {
@@ -3828,6 +3861,9 @@ function buildAnalystPreview(job) {
   const findings = Array.isArray(context.findings) ? context.findings : [];
   if (findings.some((item) => /Evidencia visual consentida/.test(item))) {
     lines.push("Visual evidence: included with explicit user consent.");
+  }
+  if (findings.some((item) => /Memoria persistente/.test(item))) {
+    lines.push("Persistent memory: cited as operator-confirmed context.");
   }
   return lines.join("\n");
 }

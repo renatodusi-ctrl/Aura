@@ -26,10 +26,21 @@ Memory should be user-controlled. Store information when the user asks to rememb
 
 Operational session memory must be redacted before exposure. API keys, tokens, secrets, passwords and `.env` paths are replaced before the summary is returned by `/api/status`, `/api/now` or local chat.
 
+Persistent memories are explicit and typed:
+
+- `preference`: confirmed operator preferences that should survive restart.
+- `project`: workspace or repository context the operator chose to keep.
+- `decision`: decisions worth reusing later.
+- `note`: general local note.
+
+The cockpit lists persistent memories and lets the operator edit or delete them. `/api/now` returns a redacted `persistentMemory` summary, and Conselho evidence briefs cite confirmed memories when they influence analysis.
+
 ## Commands
 
 Fallback examples:
 
 - `guardar Rafael prefere respostas diretas`
+- `guardar preferencia prefiro briefing executivo com proximas acoes`
+- `guardar projeto Aura usa /Users/rdusi/Documents/Projetos/Pessoal/Aura`
 - `lembrar comprar cafe`
 - `tarefa revisar roadmap do AURA`

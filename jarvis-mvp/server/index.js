@@ -11,6 +11,8 @@ import {
   initMemory,
   listMemories,
   addMemory,
+  updateMemory,
+  persistentMemorySummary,
   listTasks,
   addTask,
   updateTask,
@@ -129,6 +131,7 @@ async function route(req, res) {
       jobExportDir: config.jobExportDir,
       providers,
       memory: getStatus(),
+      persistentMemory: persistentMemorySummary(),
       operations: {
         jobProcesses: activeJobProcessSummary(),
         analystProcesses: activeAnalystProcessSummary()
@@ -262,6 +265,11 @@ async function route(req, res) {
 
   if (url.pathname === "/api/memories" && method === "POST") {
     return sendJson(res, 201, { memory: addMemory(await readJson(req)) });
+  }
+
+  const memoryRoute = matchMemoryRoute(url.pathname);
+  if (memoryRoute && method === "PATCH") {
+    return updateMemoryRoute(memoryRoute.id, req, res);
   }
 
   if (url.pathname.startsWith("/api/memories/") && method === "DELETE") {
@@ -1246,6 +1254,11 @@ function matchJobArtifactRoute(pathname) {
   };
 }
 
+function matchMemoryRoute(pathname) {
+  const match = pathname.match(/^\/api\/memories\/(\d+)$/);
+  return match ? { id: Number(match[1]) } : null;
+}
+
 function matchProviderCircuitRoute(pathname) {
   const match = pathname.match(/^\/api\/providers\/([a-z0-9_-]+)\/circuit\/reset$/i);
   return match ? { provider: match[1] } : null;
@@ -1352,6 +1365,7 @@ function buildNowSnapshot() {
     demandRef: activeJob ? nowJobReference(activeJob) : null,
     councilDecision: decision ? summarizeDebateSynthesis(decision) : null,
     sessionMemory: sessionMemorySummary(),
+    persistentMemory: persistentMemorySummary(),
     counts: {
       openTasks: tasks.length,
       waitingJobs: jobs.filter((job) => ["draft", "awaiting_confirm", "needs_input"].includes(job.status)).length,
@@ -1578,7 +1592,7 @@ function localChat(body) {
 
   if (lower.startsWith("lembrar ") || lower.startsWith("guardar ")) {
     const content = text.replace(/^(lembrar|guardar)\s+/i, "");
-    const memory = addMemory({ kind: "note", content });
+    const memory = addMemory({ kind: memoryKindFromText(content), content });
     return { reply: "Memoria guardada localmente.", memory };
   }
 
@@ -1615,9 +1629,10 @@ function localChat(body) {
 function localWorkContinuity() {
   const now = buildNowSnapshot();
   const session = sessionMemorySummary();
+  const persistent = persistentMemorySummary();
   const jobs = listJobs(8);
   const active = jobs.filter((job) => ["draft", "awaiting_confirm", "queued", "running", "needs_input"].includes(job.status));
-  const sessionLines = sessionSummaryLines(session);
+  const sessionLines = [...sessionSummaryLines(session), ...persistentMemoryLines(persistent)];
   if (!active.length) {
     const latest = jobs[0];
     return {
@@ -1626,6 +1641,7 @@ function localWorkContinuity() {
         : [`Agora: ${now.nextStep}`, ...sessionLines].join("\n"),
       now,
       sessionMemory: session,
+      persistentMemory: persistent,
       jobs
     };
   }
@@ -1639,8 +1655,18 @@ function localWorkContinuity() {
     ].join("\n"),
     now,
     sessionMemory: session,
+    persistentMemory: persistent,
     jobs: active
   };
+}
+
+async function updateMemoryRoute(id, req, res) {
+  try {
+    const updated = updateMemory(id, await readJson(req));
+    return sendJson(res, 200, { memory: updated, persistentMemory: persistentMemorySummary() });
+  } catch (error) {
+    return sendJson(res, statusForJobError(error), bodyForJobError(error, "Could not update memory."));
+  }
 }
 
 function sessionSummaryLines(session) {
@@ -1655,6 +1681,34 @@ function sessionSummaryLines(session) {
     lines.push(`Memoria da sessao: ${session.nextAction}`);
   }
   return lines.slice(0, 3);
+}
+
+function persistentMemoryLines(memory) {
+  const lines = [];
+  if (memory.preferences?.[0]?.content) {
+    lines.push(`Preferencia confirmada: ${memory.preferences[0].content}`);
+  }
+  if (memory.projects?.[0]?.content) {
+    lines.push(`Contexto de projeto: ${memory.projects[0].content}`);
+  }
+  if (memory.decisions?.[0]?.content) {
+    lines.push(`Decisao persistente: ${memory.decisions[0].content}`);
+  }
+  return lines.slice(0, 3);
+}
+
+function memoryKindFromText(text) {
+  const normalized = normalizeText(text);
+  if (/\b(?:prefiro|preferencia|preferência|gosto|quero manter|priorize)\b/.test(normalized)) {
+    return "preference";
+  }
+  if (/\b(?:projeto|repo|repositorio|workspace|pasta)\b/.test(normalized)) {
+    return "project";
+  }
+  if (/\b(?:decisao|decisão|decidimos|recomendacao|recomendação)\b/.test(normalized)) {
+    return "decision";
+  }
+  return "note";
 }
 
 function parseTaskDevelopmentIntent(text) {

@@ -184,7 +184,7 @@ export function listMemories(limit = 50) {
 }
 
 export function addMemory({ kind = "note", content }) {
-  const text = String(content || "").trim();
+  const text = redactText(String(content || "").trim());
   if (!text) {
     throw new Error("Memory content is required.");
   }
@@ -197,9 +197,55 @@ export function addMemory({ kind = "note", content }) {
   `).get(result.lastInsertRowid);
 }
 
+export function updateMemory(id, { kind, content }) {
+  const current = db.prepare(`
+    SELECT id, kind, content, created_at AS createdAt, updated_at AS updatedAt
+    FROM memories
+    WHERE id = ?
+  `).get(Number(id));
+  if (!current) {
+    throw new Error("Memory not found.");
+  }
+
+  const nextKind = kind === undefined ? current.kind : String(kind || "note").trim();
+  const nextContent = content === undefined ? current.content : redactText(String(content || "").trim());
+  if (!nextContent) {
+    throw new Error("Memory content is required.");
+  }
+
+  db.prepare(`
+    UPDATE memories
+    SET kind = ?, content = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).run(nextKind, nextContent, Number(id));
+
+  return db.prepare(`
+    SELECT id, kind, content, created_at AS createdAt, updated_at AS updatedAt
+    FROM memories
+    WHERE id = ?
+  `).get(Number(id));
+}
+
 export function deleteMemory(id) {
   const result = db.prepare("DELETE FROM memories WHERE id = ?").run(Number(id));
   return { deleted: result.changes > 0 };
+}
+
+export function persistentMemorySummary(limit = 12) {
+  const memories = listMemories(limit)
+    .map((memory) => ({
+      id: memory.id,
+      kind: memory.kind,
+      content: redactText(memory.content),
+      updatedAt: memory.updatedAt
+    }));
+  return {
+    retention: "sqlite-explicit",
+    preferences: memories.filter((item) => item.kind === "preference").slice(0, 5),
+    projects: memories.filter((item) => item.kind === "project").slice(0, 5),
+    decisions: memories.filter((item) => item.kind === "decision").slice(0, 5),
+    notes: memories.filter((item) => item.kind === "note").slice(0, 5)
+  };
 }
 
 export function listTasks(includeDone = true) {
