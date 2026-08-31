@@ -61,6 +61,17 @@ scripts\verify.ps1
 
 A rubrica de evolucao rumo a uma experiencia estilo J.A.R.V.I.S. fica em `docs/JARVIS_RUBRIC.md` e e validada por `npm run verify`.
 
+## Demo JARVIS
+
+Para preparar uma apresentacao local repetivel:
+
+```powershell
+npm run demo:seed
+npm run verify
+```
+
+O roteiro fica em `docs/DEMO_JARVIS.md` e cobre voz, HUD, Conselho, implementacao confirmavel, privacidade e re-score.
+
 ## Dados locais
 
 O banco SQLite fica em `data/aura.sqlite`. Essa pasta esta no `.gitignore`.
