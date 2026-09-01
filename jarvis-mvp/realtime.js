@@ -6,6 +6,14 @@ import {
   voiceDirectiveForText
 } from "./voiceRuntime.js";
 
+const GEMINI_CAPTURE_BUFFER_SIZE = 4096;
+const GEMINI_PLAYBACK_LEAD_SECONDS = 0.32;
+const GEMINI_PLAYBACK_RAMP_SECONDS = 0.004;
+const GEMINI_CONTINUOUS_QUEUE_THRESHOLD_SECONDS = 0.015;
+const GEMINI_RESUME_BUFFER_SECONDS = 0.42;
+const GEMINI_RESUME_MAX_WAIT_MS = 360;
+const GEMINI_MIC_SUPPRESSION_TAIL_MS = 180;
+
 export class RealtimeClient {
   constructor({ onEvent, onStatus, onTranscript, onToolCall, onVoiceMetrics, sessionToken }) {
     this.onEvent = onEvent;
@@ -22,9 +30,16 @@ export class RealtimeClient {
     this.audioContext = null;
     this.source = null;
     this.processor = null;
+    this.captureSilence = null;
+    this.assistantGain = null;
     this.playbackTime = 0;
     this.audioSources = new Set();
+    this.pendingAudioBuffers = [];
+    this.playbackTimer = null;
+    this.firstPendingAudioAt = 0;
     this.muteAssistantAudioUntil = 0;
+    this.micSuppressedUntil = 0;
+    this.lastMicSuppressionEventAt = 0;
     this.voiceMetrics = createVoiceMetrics();
     this.handledToolCalls = new Set();
   }
@@ -55,6 +70,7 @@ export class RealtimeClient {
     this.audio.autoplay = true;
     this.audio.playsInline = true;
     this.audio.hidden = true;
+    this.audio.volume = 0.85;
     document.body.append(this.audio);
     this.pc.ontrack = (event) => {
       this.audio.srcObject = event.streams[0];
@@ -69,7 +85,7 @@ export class RealtimeClient {
       this.onEvent({ type: "webrtc.ice_state", state: this.pc?.iceConnectionState });
     };
 
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.stream = await requestMicrophoneStream();
     this.markVoice("microphone-ready");
     this.pc.addTrack(this.stream.getAudioTracks()[0], this.stream);
 
@@ -139,16 +155,24 @@ export class RealtimeClient {
     });
 
     this.onStatus("requesting-microphone");
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.stream = await requestMicrophoneStream();
     this.markVoice("microphone-ready");
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     this.audioContext = new AudioContextCtor();
     await this.audioContext.resume();
     this.playbackTime = this.audioContext.currentTime;
+    this.assistantGain = this.audioContext.createGain();
+    this.assistantGain.gain.value = 0.85;
+    this.assistantGain.connect(this.audioContext.destination);
     this.source = this.audioContext.createMediaStreamSource(this.stream);
-    this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+    this.processor = this.audioContext.createScriptProcessor(GEMINI_CAPTURE_BUFFER_SIZE, 1, 1);
+    this.captureSilence = this.audioContext.createGain();
+    this.captureSilence.gain.value = 0;
     this.processor.onaudioprocess = (event) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (this.shouldSuppressMicrophoneForPlayback()) {
         return;
       }
       const pcm = floatTo16BitPcm(downsampleBuffer(event.inputBuffer.getChannelData(0), this.audioContext.sampleRate, 16000));
@@ -159,7 +183,12 @@ export class RealtimeClient {
       }));
     };
     this.source.connect(this.processor);
-    this.processor.connect(this.audioContext.destination);
+    this.processor.connect(this.captureSilence);
+    this.captureSilence.connect(this.audioContext.destination);
+    this.onEvent({
+      type: "aura.audio.capture_constraints",
+      constraints: microphoneAudioConstraints()
+    });
   }
 
   disconnect() {
@@ -167,8 +196,11 @@ export class RealtimeClient {
     this.ws?.close();
     this.pc?.close();
     this.processor?.disconnect();
+    this.captureSilence?.disconnect();
     this.source?.disconnect();
     this.stopAssistantAudio();
+    this.assistantGain?.disconnect();
+    this.clearPendingGeminiAudio();
     this.stream?.getTracks().forEach((track) => track.stop());
     this.audio?.remove();
     this.audioContext?.close().catch(() => {});
@@ -180,8 +212,15 @@ export class RealtimeClient {
     this.audioContext = null;
     this.source = null;
     this.processor = null;
+    this.captureSilence = null;
+    this.assistantGain = null;
     this.playbackTime = 0;
+    this.pendingAudioBuffers = [];
+    this.playbackTimer = null;
+    this.firstPendingAudioAt = 0;
     this.muteAssistantAudioUntil = 0;
+    this.micSuppressedUntil = 0;
+    this.lastMicSuppressionEventAt = 0;
     this.handledToolCalls.clear();
     this.markVoice("closed");
     this.onStatus("idle");
@@ -374,16 +413,107 @@ export class RealtimeClient {
     for (let index = 0; index < pcm.length; index += 1) {
       channel[index] = Math.max(-1, Math.min(1, pcm[index] / 32768));
     }
+    this.pendingAudioBuffers.push(audioBuffer);
+    if (!this.firstPendingAudioAt) {
+      this.firstPendingAudioAt = performance.now();
+    }
+    this.scheduleGeminiPlayback();
+  }
+
+  scheduleGeminiPlayback() {
+    if (!this.audioContext || !this.pendingAudioBuffers.length) {
+      return;
+    }
+    const currentTime = this.audioContext.currentTime;
+    if (this.playbackTime > currentTime + GEMINI_CONTINUOUS_QUEUE_THRESHOLD_SECONDS) {
+      this.flushGeminiPlayback();
+      return;
+    }
+    const pendingDuration = this.pendingAudioBuffers.reduce((total, buffer) => total + buffer.duration, 0);
+    const waitedMs = performance.now() - this.firstPendingAudioAt;
+    if (pendingDuration >= GEMINI_RESUME_BUFFER_SECONDS || waitedMs >= GEMINI_RESUME_MAX_WAIT_MS) {
+      this.flushGeminiPlayback();
+      return;
+    }
+    if (!this.playbackTimer) {
+      this.playbackTimer = setTimeout(() => {
+        this.playbackTimer = null;
+        this.flushGeminiPlayback();
+      }, Math.max(30, GEMINI_RESUME_MAX_WAIT_MS - waitedMs));
+    }
+  }
+
+  flushGeminiPlayback() {
+    if (!this.audioContext || !this.pendingAudioBuffers.length) {
+      return;
+    }
+    if (this.playbackTimer) {
+      clearTimeout(this.playbackTimer);
+      this.playbackTimer = null;
+    }
+    const currentTime = this.audioContext.currentTime;
+    let continuesQueuedAudio = this.playbackTime > currentTime + GEMINI_CONTINUOUS_QUEUE_THRESHOLD_SECONDS;
+    while (this.pendingAudioBuffers.length) {
+      const audioBuffer = this.pendingAudioBuffers.shift();
+      this.scheduleAudioBufferSource(audioBuffer, {
+        fadeIn: !continuesQueuedAudio
+      });
+      continuesQueuedAudio = true;
+    }
+    this.firstPendingAudioAt = 0;
+  }
+
+  scheduleAudioBufferSource(audioBuffer, { fadeIn }) {
+    if (!this.audioContext) {
+      return;
+    }
     const source = this.audioContext.createBufferSource();
+    const envelope = this.audioContext.createGain();
     source.buffer = audioBuffer;
-    source.connect(this.audioContext.destination);
-    const startAt = Math.max(this.audioContext.currentTime, this.playbackTime);
+    source.connect(envelope);
+    envelope.connect(this.assistantGain || this.audioContext.destination);
+    const currentTime = this.audioContext.currentTime;
+    const startAt = fadeIn
+      ? Math.max(currentTime + GEMINI_PLAYBACK_LEAD_SECONDS, this.playbackTime)
+      : Math.max(currentTime, this.playbackTime);
+    const stopAt = startAt + audioBuffer.duration;
+    if (fadeIn) {
+      envelope.gain.setValueAtTime(0.0001, startAt);
+      envelope.gain.linearRampToValueAtTime(1, startAt + Math.min(GEMINI_PLAYBACK_RAMP_SECONDS, audioBuffer.duration / 2));
+      this.onEvent({ type: "aura.audio.playback_buffer_refilled" });
+    } else {
+      envelope.gain.setValueAtTime(1, startAt);
+    }
     source.start(startAt);
     this.audioSources.add(source);
+    const queuedPlaybackMs = Math.max(0, stopAt - currentTime) * 1000;
+    this.micSuppressedUntil = Math.max(this.micSuppressedUntil, performance.now() + queuedPlaybackMs + GEMINI_MIC_SUPPRESSION_TAIL_MS);
     source.addEventListener("ended", () => {
       this.audioSources.delete(source);
+      envelope.disconnect();
     });
-    this.playbackTime = startAt + audioBuffer.duration;
+    this.playbackTime = stopAt;
+  }
+
+  clearPendingGeminiAudio() {
+    if (this.playbackTimer) {
+      clearTimeout(this.playbackTimer);
+      this.playbackTimer = null;
+    }
+    this.pendingAudioBuffers = [];
+    this.firstPendingAudioAt = 0;
+  }
+
+  shouldSuppressMicrophoneForPlayback() {
+    if (!this.audioSources.size && performance.now() >= this.micSuppressedUntil) {
+      return false;
+    }
+    const now = performance.now();
+    if (now - this.lastMicSuppressionEventAt > 1000) {
+      this.lastMicSuppressionEventAt = now;
+      this.onEvent({ type: "aura.audio.capture_suppressed_during_playback" });
+    }
+    return true;
   }
 
   textWithAttachmentContext(text, attachments) {
@@ -420,6 +550,7 @@ export class RealtimeClient {
   }
 
   stopAssistantAudio() {
+    this.clearPendingGeminiAudio();
     for (const source of this.audioSources) {
       try {
         source.stop();
@@ -492,6 +623,28 @@ async function realtimeApiError(response) {
   error.type = apiError.type || null;
   error.code = apiError.code || null;
   return error;
+}
+
+async function requestMicrophoneStream() {
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: microphoneAudioConstraints()
+    });
+  } catch (error) {
+    if (error?.name === "OverconstrainedError") {
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    throw error;
+  }
+}
+
+function microphoneAudioConstraints() {
+  return {
+    echoCancellation: { ideal: true },
+    noiseSuppression: { ideal: true },
+    autoGainControl: { ideal: false },
+    channelCount: { ideal: 1 }
+  };
 }
 
 function downsampleBuffer(input, inputRate, outputRate) {

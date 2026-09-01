@@ -25,6 +25,7 @@ const state = {
   costs: null,
   github: null,
   githubIssueState: "open",
+  terminal: null,
   localFiles: null,
   codexActivity: null,
   localFileRoot: 0,
@@ -48,6 +49,14 @@ const state = {
   screenPerceptionTimer: null,
   lastPerceptionSummary: "",
   voiceMetrics: null,
+  auraCore: {
+    graph: null,
+    raf: 0,
+    last: 0,
+    rotY: 0.72,
+    resizeObserver: null,
+    voice: "idle"
+  },
   realtime: null,
   narrationEnabled: localStorage.getItem("aura.narrationEnabled") !== "false",
   proactivityEnabled: localStorage.getItem("aura.proactivityEnabled") !== "false",
@@ -84,6 +93,9 @@ const els = {
   localInput: document.querySelector("#local-input"),
   localSubmitButton: document.querySelector("#local-submit-button"),
   voicePanel: document.querySelector(".voice-panel"),
+  auraCoreButton: document.querySelector("#aura-core"),
+  auraCoreCanvas: document.querySelector("#aura-core-canvas"),
+  auraCoreLabel: document.querySelector("#aura-core-label"),
   narrationToggle: document.querySelector("#narration-toggle"),
   voiceMetrics: document.querySelector("#voice-metrics"),
   commandBrief: document.querySelector("#command-brief"),
@@ -103,6 +115,8 @@ const els = {
   githubRefreshButton: document.querySelector("#github-refresh-button"),
   githubStateSelect: document.querySelector("#github-state-select"),
   githubPanel: document.querySelector("#github-panel"),
+  terminalRefreshButton: document.querySelector("#terminal-refresh-button"),
+  terminalPanel: document.querySelector("#terminal-panel"),
   localFilesRefreshButton: document.querySelector("#local-files-refresh-button"),
   localFilesPanel: document.querySelector("#local-files-panel"),
   codexActivityRefreshButton: document.querySelector("#codex-activity-refresh-button"),
@@ -153,6 +167,7 @@ async function init() {
   });
 
   bindEvents();
+  initAuraCore();
   await refreshAll();
   renderRoutine();
   setInterval(() => {
@@ -211,6 +226,10 @@ function bindEvents() {
       state.narrationQueue = [];
       state.narrationSpeaking = false;
     }
+  });
+  els.auraCoreButton?.addEventListener("click", () => {
+    els.voiceButton?.focus();
+    appendMessage("system", "Nucleo AURA pronto. Use Conectar voz ou escreva um comando para iniciar.");
   });
 
   els.localForm.addEventListener("submit", async (event) => {
@@ -308,6 +327,7 @@ function bindEvents() {
     state.githubIssueState = els.githubStateSelect.value || "open";
     await refreshGitHubIssues();
   });
+  els.terminalRefreshButton?.addEventListener("click", refreshTerminalDiagnostics);
   els.localFilesRefreshButton?.addEventListener("click", refreshLocalFiles);
   els.codexActivityRefreshButton?.addEventListener("click", refreshCodexActivity);
   els.topCostsRefreshButton.addEventListener("click", refreshCosts);
@@ -335,6 +355,9 @@ function bindEvents() {
       renderSessionTabs();
       if (state.sessionTab === "github") {
         refreshGitHubIssues().catch((error) => logEvent("github.refresh.failed", { error: error.message }));
+      }
+      if (state.sessionTab === "terminal") {
+        refreshTerminalDiagnostics().catch((error) => logEvent("terminal.refresh.failed", { error: error.message }));
       }
     });
   });
@@ -479,7 +502,7 @@ function activeJobSummary() {
 }
 
 async function refreshAll() {
-  const [status, nowData, tasksData, memoriesData, jobsData, costsData, githubData, localFilesData, codexActivityData] = await Promise.all([
+  const [status, nowData, tasksData, memoriesData, jobsData, costsData, githubData, terminalData, localFilesData, codexActivityData] = await Promise.all([
     api("/api/status"),
     api("/api/now"),
     api("/api/tasks"),
@@ -487,6 +510,7 @@ async function refreshAll() {
     api("/api/jobs?limit=20"),
     api("/api/costs"),
     loadGitHubIssues(),
+    loadTerminalDiagnostics(),
     loadLocalFiles(),
     api("/api/codex/activity")
   ]);
@@ -498,6 +522,7 @@ async function refreshAll() {
   state.jobs = jobsData.jobs;
   state.costs = costsData;
   state.github = githubData;
+  state.terminal = terminalData;
   state.localFiles = localFilesData;
   state.codexActivity = codexActivityData;
   await loadSelectedJob();
@@ -514,6 +539,7 @@ async function refreshAll() {
   renderTools();
   renderCosts();
   renderGitHubIssues();
+  renderTerminalDiagnostics();
   renderLocalFiles();
   renderCodexActivity();
   renderCommandBrief();
@@ -560,6 +586,12 @@ async function refreshGitHubIssues() {
   renderLocalContextSummary();
 }
 
+async function refreshTerminalDiagnostics() {
+  state.terminal = await loadTerminalDiagnostics();
+  renderTerminalDiagnostics();
+  renderIntegrations();
+}
+
 async function refreshLocalFiles() {
   state.localFiles = await loadLocalFiles();
   renderLocalFiles();
@@ -584,6 +616,17 @@ async function loadGitHubIssues() {
       status: error.status || 0,
       github: error.details?.github || null,
       issues: [],
+      error: error.message
+    };
+  }
+}
+
+async function loadTerminalDiagnostics() {
+  try {
+    return await api("/api/terminal/commands");
+  } catch (error) {
+    return {
+      commands: [],
       error: error.message
     };
   }
@@ -1009,6 +1052,7 @@ function renderCommandBrief() {
 }
 
 function renderVoiceMetrics() {
+  renderAuraCoreState();
   if (!els.voiceMetrics) {
     return;
   }
@@ -1096,6 +1140,7 @@ function renderTopView() {
     button.setAttribute("aria-pressed", String(button.dataset.topView === state.topView));
   });
   document.querySelector(".cockpit").hidden = showCosts;
+  document.querySelector(".left-rail").hidden = showCosts;
   document.querySelector(".jobs-panel").hidden = showCosts;
   document.querySelector(".session-panel").hidden = showCosts;
   if (els.topCostPanel) {
@@ -1144,6 +1189,7 @@ function renderIntegrations() {
     integrationItemForProvider("Grok", providers.grok),
     integrationItemForProvider("OpenRouter", providers.openrouter),
     integrationItemForGitHub(),
+    integrationItemForTerminal(),
     {
       name: "Workspace",
       role: "Cockpit local",
@@ -1206,6 +1252,17 @@ function integrationItemForGitHub() {
       ? `${github.repo || "repo"}${openCount === null ? "" : ` · ${formatInteger(openCount)} aberta(s)`}`
       : github.error || "gh auth login ou GITHUB_TOKEN pendente",
     state: github.configured ? "available" : "unavailable"
+  };
+}
+
+function integrationItemForTerminal() {
+  const count = state.terminal?.commands?.length || 0;
+  return {
+    key: "terminal",
+    name: "Terminal",
+    role: "Diagnosticos",
+    detail: state.terminal?.error || `${formatInteger(count)} consulta(s) permitida(s)`,
+    state: state.terminal?.error ? "unavailable" : "available"
   };
 }
 
@@ -3655,6 +3712,116 @@ function labelForGitHubIssueState(value) {
   return labels[value] || "issues";
 }
 
+function renderTerminalDiagnostics() {
+  if (!els.terminalPanel) {
+    return;
+  }
+
+  const data = state.terminal;
+  if (!data) {
+    els.terminalPanel.replaceChildren(emptyParagraph("Diagnosticos de terminal ainda nao carregados."));
+    return;
+  }
+
+  const summary = document.createElement("div");
+  summary.className = "terminal-summary";
+  summary.append(
+    statusMetric("Modo", "allowlist", "sem comando livre"),
+    statusMetric("Consultas", formatInteger(data.commands?.length || 0), "CLIs e ambiente"),
+    statusMetric("Seguranca", "redacao ativa", "chaves nunca sao exibidas")
+  );
+
+  const list = document.createElement("ul");
+  list.className = "terminal-command-list";
+  if (data.error) {
+    list.append(emptyListItem(`Terminal indisponivel: ${data.error}`));
+  } else if (!data.commands?.length) {
+    list.append(emptyListItem("Nenhuma consulta permitida configurada."));
+  } else {
+    for (const command of data.commands) {
+      list.append(renderTerminalDiagnosticCommand(command));
+    }
+  }
+
+  const output = renderTerminalOutput(data.lastRun);
+  const note = document.createElement("p");
+  note.className = "permission-note";
+  note.textContent = "AURA executa somente diagnosticos conhecidos por ID, sem shell e com saida filtrada no servidor local.";
+
+  els.terminalPanel.replaceChildren(summary, list, output, note);
+}
+
+function renderTerminalDiagnosticCommand(command) {
+  const item = document.createElement("li");
+
+  const main = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = command.label;
+  const meta = document.createElement("small");
+  meta.textContent = `${command.group} · ${command.command}`;
+  const description = document.createElement("small");
+  description.textContent = command.description;
+  main.append(title, meta, description);
+
+  const run = document.createElement("button");
+  run.type = "button";
+  run.textContent = "Consultar";
+  run.addEventListener("click", async () => {
+    await withBusyButton(run, "Consultando", async () => {
+      const payload = await api("/api/terminal/run", {
+        method: "POST",
+        body: { id: command.id }
+      });
+      state.terminal = {
+        ...(state.terminal || {}),
+        lastRun: payload.result
+      };
+      renderTerminalDiagnostics();
+      appendMessage("system", `Terminal seguro: ${payload.result.label} - ${payload.result.summary}`);
+    });
+  });
+
+  item.append(main, run);
+  return item;
+}
+
+function renderTerminalOutput(result) {
+  const section = document.createElement("section");
+  section.className = "terminal-output";
+  const heading = document.createElement("h3");
+  heading.textContent = "Ultima consulta";
+  section.append(heading);
+
+  if (!result) {
+    section.append(emptyParagraph("Nenhum diagnostico executado nesta sessao."));
+    return section;
+  }
+
+  const meta = document.createElement("p");
+  meta.className = "terminal-output-meta";
+  meta.textContent = `${result.label} · ${result.ok ? "ok" : "erro"} · exit ${result.exitCode ?? "n/a"} · ${result.finishedAt ? formatDateTime(result.finishedAt) : "agora"}`;
+
+  const summary = document.createElement("p");
+  summary.className = result.ok ? "terminal-output-summary ok" : "terminal-output-summary error";
+  summary.textContent = result.summary;
+
+  const stdout = terminalPre("Saida", result.stdout);
+  const stderr = terminalPre("Erros", result.stderr);
+  section.append(meta, summary, stdout, stderr);
+  return section;
+}
+
+function terminalPre(label, value) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "terminal-pre-block";
+  const strong = document.createElement("strong");
+  strong.textContent = label;
+  const pre = document.createElement("pre");
+  pre.textContent = value || "Sem conteudo.";
+  wrapper.append(strong, pre);
+  return wrapper;
+}
+
 function renderCodexActivity() {
   if (!els.codexActivityPanel) {
     return;
@@ -4578,6 +4745,7 @@ function setVoiceStatus(status) {
     els.voiceButton.dataset.connected = "true";
     els.voiceButton.textContent = "Desconectar voz";
   }
+  renderAuraCoreState(status);
 }
 
 function humanizeVoiceError(error) {
@@ -4646,6 +4814,9 @@ async function handleRealtimeToolCall(call) {
   }
   if (call.name === "aura_codex_activity") {
     return codexActivityFromRealtime();
+  }
+  if (call.name === "aura_terminal_diagnostic") {
+    return terminalDiagnosticFromRealtime(args);
   }
 
   return { ok: false, error: "Ferramenta desconhecida." };
@@ -4787,6 +4958,47 @@ async function codexActivityFromRealtime() {
   } catch (error) {
     const message = humanizeJobMessage(error.message, error.details);
     appendMessage("system", `Nao consegui consultar o Codex por voz: ${message}`);
+    return { ok: false, error: message };
+  }
+}
+
+async function terminalDiagnosticFromRealtime(args) {
+  const id = String(args.id || "").trim();
+  if (!id) {
+    return { ok: false, error: "Id do diagnostico ausente." };
+  }
+
+  try {
+    if (!state.terminal?.commands?.length) {
+      state.terminal = await loadTerminalDiagnostics();
+    }
+    const payload = await api("/api/terminal/run", {
+      method: "POST",
+      body: { id }
+    });
+    state.terminal = {
+      ...(state.terminal || {}),
+      lastRun: payload.result
+    };
+    renderTerminalDiagnostics();
+    renderIntegrations();
+    openSessionPanel("terminal");
+
+    appendMessage("system", `Diagnostico de terminal pela voz: ${payload.result.label} - ${payload.result.summary}`);
+    return {
+      ok: payload.result.ok,
+      id: payload.result.id,
+      label: payload.result.label,
+      command: payload.result.command,
+      summary: payload.result.summary,
+      exitCode: payload.result.exitCode,
+      stdout: payload.result.stdout,
+      stderr: payload.result.stderr,
+      responseHint: "Responda em portugues, cite apenas o resumo do diagnostico e diga que a aba Terminal foi aberta."
+    };
+  } catch (error) {
+    const message = humanizeJobMessage(error.message, error.details);
+    appendMessage("system", `Nao consegui consultar o terminal por voz: ${message}`);
     return { ok: false, error: message };
   }
 }
@@ -4974,6 +5186,385 @@ function renderMessageAttachments(attachments) {
     list.append(card);
   }
   return list;
+}
+
+function initAuraCore() {
+  if (!els.auraCoreCanvas) {
+    return;
+  }
+  state.auraCore.graph = buildAuraNeuralGraph();
+  fitAuraCoreCanvas();
+  if ("ResizeObserver" in window) {
+    state.auraCore.resizeObserver = new ResizeObserver(() => {
+      fitAuraCoreCanvas();
+      drawAuraCore(performance.now());
+    });
+    state.auraCore.resizeObserver.observe(els.auraCoreCanvas);
+  }
+  renderAuraCoreState();
+}
+
+function renderAuraCoreState(explicitStatus = "") {
+  if (!els.auraCoreCanvas || !els.auraCoreButton) {
+    return;
+  }
+  const voice = auraCoreVoiceState(explicitStatus);
+  state.auraCore.voice = voice;
+  els.auraCoreButton.dataset.voice = voice;
+  const label = auraCoreLabel(voice);
+  if (els.auraCoreLabel) {
+    els.auraCoreLabel.textContent = label;
+  }
+  els.auraCoreButton.setAttribute("aria-label", `Nucleo da AURA: ${label}`);
+  drawAuraCore(performance.now());
+  if (auraCoreIsLive(voice)) {
+    startAuraCoreLoop();
+  }
+}
+
+function startAuraCoreLoop() {
+  if (state.auraCore.raf || prefersReducedMotion()) {
+    return;
+  }
+  state.auraCore.last = performance.now();
+  const loop = (now) => {
+    drawAuraCore(now);
+    if (auraCoreIsLive(state.auraCore.voice)) {
+      state.auraCore.raf = requestAnimationFrame(loop);
+    } else {
+      state.auraCore.raf = 0;
+    }
+  };
+  state.auraCore.raf = requestAnimationFrame(loop);
+}
+
+function fitAuraCoreCanvas() {
+  const canvas = els.auraCoreCanvas;
+  if (!canvas) {
+    return;
+  }
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(1, Math.round(canvas.clientWidth * dpr));
+  const height = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+}
+
+function drawAuraCore(now) {
+  const canvas = els.auraCoreCanvas;
+  const graph = state.auraCore.graph;
+  if (!canvas || !graph) {
+    return;
+  }
+  const ctx = canvas.getContext("2d", { alpha: true });
+  if (!ctx) {
+    return;
+  }
+
+  fitAuraCoreCanvas();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const cx = width / 2;
+  const cy = height / 2;
+  const radius = Math.min(width, height) * 0.38;
+  const voice = state.auraCore.voice;
+  const live = auraCoreIsLive(voice) && !prefersReducedMotion();
+  const dt = state.auraCore.last ? Math.min(0.05, (now - state.auraCore.last) / 1000) : 0;
+  state.auraCore.last = now;
+  if (live) {
+    const spin = voice === "speaking" ? 0.22 : voice === "working" ? 0.1 : 0.08;
+    state.auraCore.rotY += dt * spin;
+  }
+
+  const wash = ctx.createRadialGradient(cx, cy, radius * 0.05, cx, cy, radius * 1.35);
+  wash.addColorStop(0, "rgba(48, 22, 2, 0.72)");
+  wash.addColorStop(0.45, "rgba(18, 10, 2, 0.28)");
+  wash.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = wash;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 1.32, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 1.18, 0, Math.PI * 2);
+  ctx.clip();
+
+  const rotX = 0.42;
+  const rotY = state.auraCore.rotY;
+  const projected = graph.nodes.map((node) => auraProject(auraRotate(node, rotY, rotX), cx, cy, radius));
+  const t = now / 1000;
+  const fireAmount = voice === "speaking" ? 1 : voice === "working" ? 0.82 : voice === "listening" ? 0.55 : 0;
+  const fireSpeed = voice === "speaking" ? 5.6 : voice === "working" ? 2.35 : 3.2;
+
+  ctx.globalCompositeOperation = "lighter";
+  for (const edge of graph.edges) {
+    const pa = projected[edge.a];
+    const pb = projected[edge.b];
+    const depth = (pa.z + pb.z) * 0.5;
+    const depthAlpha = 0.2 + Math.max(0, 0.55 - depth * 0.45);
+    let fire = 0;
+    if (live) {
+      const wave = voice === "working"
+        ? Math.sin(t * fireSpeed - edge.core * 6.5 + edge.phase)
+        : Math.sin(t * fireSpeed + edge.phase * 1.7);
+      fire = Math.pow(Math.max(0, wave), 6) * fireAmount;
+    }
+    const alpha = (live ? 0.1 : 0.055) * depthAlpha + fire * 0.95;
+    if (alpha < 0.015) {
+      continue;
+    }
+
+    ctx.beginPath();
+    const first = auraProject(auraRotate(edge.samples[0], rotY, rotX), cx, cy, radius);
+    ctx.moveTo(first.x, first.y);
+    for (let index = 1; index < edge.samples.length; index += 1) {
+      const point = auraProject(auraRotate(edge.samples[index], rotY, rotX), cx, cy, radius);
+      ctx.lineTo(point.x, point.y);
+    }
+    ctx.strokeStyle = auraRgba(fire > 0.28 ? AURA_CORE_COLOR : AURA_GOLD_COLOR, alpha);
+    ctx.lineWidth = (fire > 0.35 ? 1.55 : live ? 0.7 : 0.45) * (0.7 + depthAlpha);
+    ctx.stroke();
+
+    if (fire > 0.55) {
+      const sparkIndex = Math.min(edge.samples.length - 1, Math.floor(((t * 1.4 + edge.phase) % 1) * (edge.samples.length - 1)));
+      const spark = auraProject(auraRotate(edge.samples[sparkIndex], rotY, rotX), cx, cy, radius);
+      ctx.beginPath();
+      ctx.arc(spark.x, spark.y, 1.15 + fire * 1.9, 0, Math.PI * 2);
+      ctx.fillStyle = auraRgba(AURA_CORE_COLOR, 0.35 + fire * 0.55);
+      ctx.fill();
+    }
+  }
+
+  for (let index = 0; index < graph.nodes.length; index += 1) {
+    const point = projected[index];
+    const node = graph.nodes[index];
+    const depthAlpha = 0.2 + Math.max(0, 0.7 - point.z * 0.5);
+    const nodeFire = live
+      ? Math.pow(Math.max(0, Math.sin(t * fireSpeed * 0.9 + node.seed * 12)), 14) * fireAmount
+      : 0;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, (node.r < 0.7 ? 0.7 : 0.95) + nodeFire * 1.4, 0, Math.PI * 2);
+    ctx.fillStyle = auraRgba(AURA_CORE_COLOR, 0.12 * depthAlpha + nodeFire * 0.9);
+    ctx.fill();
+  }
+
+  const coreAlpha = live ? 0.34 + fireAmount * 0.28 : 0.18;
+  const coreGlow = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius * 0.42);
+  coreGlow.addColorStop(0, auraRgba(AURA_CORE_COLOR, coreAlpha));
+  coreGlow.addColorStop(0.35, auraRgba(AURA_GOLD_COLOR, coreAlpha * 0.45));
+  coreGlow.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = coreGlow;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 0.42, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+  ctx.globalCompositeOperation = "source-over";
+  ctx.strokeStyle = "rgba(232,163,23,0.28)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 1.05, -0.4, 1.1);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius * 1.12, 2.2, 3.5);
+  ctx.stroke();
+}
+
+const AURA_GOLD_COLOR = { r: 255, g: 176, b: 58 };
+const AURA_CORE_COLOR = { r: 255, g: 220, b: 140 };
+
+function auraCoreVoiceState(explicitStatus = "") {
+  const status = String(explicitStatus || "");
+  if (status === "requesting-token" || status === "connecting-gemini" || status === "negotiating") {
+    return "working";
+  }
+  const turnState = state.voiceMetrics?.turnState || "";
+  if (turnState === "speaking") {
+    return "speaking";
+  }
+  if (turnState === "connecting") {
+    return "working";
+  }
+  if (turnState === "listening" || status === "standby" || status === "connected" || status === "requesting-microphone") {
+    return "listening";
+  }
+  return "idle";
+}
+
+function auraCoreLabel(voice) {
+  const labels = {
+    idle: "Standby",
+    listening: "Ouvindo",
+    working: "Pensando",
+    speaking: "Falando"
+  };
+  return labels[voice] || "Standby";
+}
+
+function auraCoreIsLive(voice) {
+  return voice === "speaking" || voice === "working" || voice === "listening";
+}
+
+function buildAuraNeuralGraph(seed = 3772) {
+  const random = mulberry32(seed);
+  const nodes = [];
+  const surfaceCount = 220;
+  const golden = Math.PI * (3 - Math.sqrt(5));
+
+  for (let index = 0; index < surfaceCount; index += 1) {
+    const y = 1 - (index / (surfaceCount - 1)) * 2;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const theta = golden * index;
+    const jitter = 0.018 * (random() - 0.5);
+    nodes.push({
+      x: Math.cos(theta) * r + jitter,
+      y: y + jitter * 0.4,
+      z: Math.sin(theta) * r + jitter,
+      r: 1,
+      seed: random()
+    });
+  }
+
+  for (let index = 0; index < 52; index += 1) {
+    const u = random();
+    const v = random();
+    const theta = 2 * Math.PI * u;
+    const phi = Math.acos(2 * v - 1);
+    const rad = 0.18 + random() * 0.42;
+    nodes.push({
+      x: rad * Math.sin(phi) * Math.cos(theta),
+      y: rad * Math.sin(phi) * Math.sin(theta),
+      z: rad * Math.cos(phi),
+      r: rad,
+      seed: random()
+    });
+  }
+
+  const edges = [];
+  const seen = new Set();
+  const addEdge = (aIndex, bIndex) => {
+    if (aIndex === bIndex) {
+      return;
+    }
+    const key = aIndex < bIndex ? `${aIndex}-${bIndex}` : `${bIndex}-${aIndex}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    const a = nodes[aIndex];
+    const b = nodes[bIndex];
+    const samples = [];
+    for (let step = 0; step <= 7; step += 1) {
+      samples.push(auraSlerp(a, b, step / 7));
+    }
+    edges.push({
+      a: aIndex,
+      b: bIndex,
+      phase: random() * Math.PI * 2,
+      samples,
+      core: (a.r + b.r) / 2
+    });
+  };
+
+  for (let index = 0; index < nodes.length; index += 1) {
+    const dists = [];
+    for (let candidate = 0; candidate < nodes.length; candidate += 1) {
+      if (index === candidate) {
+        continue;
+      }
+      const distance = auraDist2(nodes[index], nodes[candidate]);
+      if (distance < 0.22) {
+        dists.push({ candidate, distance });
+      }
+    }
+    dists.sort((a, b) => a.distance - b.distance);
+    const count = nodes[index].r > 0.85 ? 5 : 4;
+    for (let edgeIndex = 0; edgeIndex < Math.min(count, dists.length); edgeIndex += 1) {
+      addEdge(index, dists[edgeIndex].candidate);
+    }
+  }
+
+  for (let index = 0; index < 38; index += 1) {
+    const a = Math.floor(random() * surfaceCount);
+    const b = Math.floor(random() * surfaceCount);
+    if (auraDist2(nodes[a], nodes[b]) > 0.7) {
+      addEdge(a, b);
+    }
+  }
+
+  return { nodes, edges };
+}
+
+function auraSlerp(a, b, t) {
+  const dot = Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y + a.z * b.z));
+  const omega = Math.acos(dot);
+  if (omega < 1e-4) {
+    return a;
+  }
+  const s = Math.sin(omega);
+  const w1 = Math.sin((1 - t) * omega) / s;
+  const w2 = Math.sin(t * omega) / s;
+  return {
+    x: a.x * w1 + b.x * w2,
+    y: a.y * w1 + b.y * w2,
+    z: a.z * w1 + b.z * w2
+  };
+}
+
+function auraRotate(value, rotY, rotX) {
+  const cy = Math.cos(rotY);
+  const sy = Math.sin(rotY);
+  const x1 = value.x * cy - value.z * sy;
+  const z1 = value.x * sy + value.z * cy;
+  const cx = Math.cos(rotX);
+  const sx = Math.sin(rotX);
+  return {
+    x: x1,
+    y: value.y * cx - z1 * sx,
+    z: value.y * sx + z1 * cx
+  };
+}
+
+function auraProject(value, cx, cy, radius) {
+  const perspective = 1.65 / (2.15 + value.z);
+  return {
+    x: cx + value.x * perspective * radius,
+    y: cy + value.y * perspective * radius,
+    z: value.z
+  };
+}
+
+function auraDist2(a, b) {
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const dz = a.z - b.z;
+  return dx * dx + dy * dy + dz * dz;
+}
+
+function auraRgba(color, alpha) {
+  return `rgba(${color.r},${color.g},${color.b},${alpha})`;
+}
+
+function mulberry32(seed) {
+  let value = seed >>> 0;
+  return () => {
+    value |= 0;
+    value = (value + 0x6d2b79f5) | 0;
+    let next = Math.imul(value ^ (value >>> 15), 1 | value);
+    next = (next + Math.imul(next ^ (next >>> 7), 61 | next)) ^ next;
+    return ((next ^ (next >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
 }
 
 function logEvent(type, payload) {

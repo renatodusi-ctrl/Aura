@@ -10,6 +10,9 @@ Tool confirmation is driven by the central policy model in `server/policy.js`.
 - `tasks.add`
 - `tasks.complete`
 - `tasks.reopen`
+- `terminal.diagnostics`
+
+`terminal.diagnostics` accepts only an allowlisted diagnostic ID. It is intended for CLI configuration checks and returns redacted output.
 
 ## Confirmation Required
 

@@ -84,6 +84,12 @@ AURA_GITHUB_REPO=renatodusi-ctrl/Aura
 
 Autenticacao: use `gh auth login` no computador local ou configure `GITHUB_TOKEN`/`GH_TOKEN` no `.env`. O token fica apenas no servidor local; o navegador recebe somente metadados das issues.
 
+## Terminal seguro
+
+AURA pode consultar diagnosticos locais em `Contexto local > Terminal` para validar configuracao de CLIs como Codex, Gemini, Grok, OpenRouter, GitHub, Node.js e npm.
+
+Esse acesso nao e um terminal livre. O servidor executa somente comandos permitidos por ID, sem shell, com tempo limite e redacao de saida antes de exibir qualquer conteudo no cockpit.
+
 ## Dados locais
 
 O banco SQLite fica em `data/aura.sqlite`. Essa pasta esta no `.gitignore`.

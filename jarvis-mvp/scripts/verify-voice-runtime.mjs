@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import {
   classifyTurnTaking,
   createVoiceMetrics,
@@ -6,6 +8,9 @@ import {
   markVoiceMetric,
   voiceDirectiveForText
 } from "../voiceRuntime.js";
+
+const root = path.resolve(import.meta.dirname, "..");
+const realtime = fs.readFileSync(path.join(root, "realtime.js"), "utf8");
 
 let metrics = createVoiceMetrics("gemini");
 metrics = markVoiceMetric(metrics, { type: "capture-requested", provider: "gemini" }, 100);
@@ -44,5 +49,31 @@ assert.deepEqual(classifyTurnTaking("Aura liste arquivos"), {
 });
 assert.equal(classifyTurnTaking("Vamos pensar com calma e comparar os riscos desta arquitetura em detalhes para evoluir a plataforma").mode, "long_conversation");
 assert.match(voiceDirectiveForText("Aura seja breve"), /ate 3 frases curtas/);
+
+for (const token of [
+  "requestMicrophoneStream",
+  "echoCancellation",
+  "noiseSuppression",
+  "autoGainControl",
+  "captureSilence",
+  "assistantGain",
+  "GEMINI_PLAYBACK_LEAD_SECONDS",
+  "GEMINI_PLAYBACK_RAMP_SECONDS",
+  "GEMINI_CONTINUOUS_QUEUE_THRESHOLD_SECONDS",
+  "GEMINI_RESUME_BUFFER_SECONDS",
+  "GEMINI_RESUME_MAX_WAIT_MS",
+  "pendingAudioBuffers",
+  "scheduleGeminiPlayback",
+  "flushGeminiPlayback",
+  "scheduleAudioBufferSource",
+  "clearPendingGeminiAudio",
+  "aura.audio.playback_buffer_refilled",
+  "shouldSuppressMicrophoneForPlayback",
+  "aura.audio.capture_suppressed_during_playback",
+  "autoGainControl: { ideal: false }",
+  "aura.audio.capture_constraints"
+]) {
+  assert.ok(realtime.includes(token), `Missing voice audio stability token: ${token}`);
+}
 
 console.log("Voice runtime verification passed.");

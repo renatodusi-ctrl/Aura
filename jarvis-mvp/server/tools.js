@@ -9,6 +9,7 @@ import {
   updateTask
 } from "./memory.js";
 import { evaluateToolPolicy } from "./policy.js";
+import { runTerminalDiagnostic } from "./terminalAdapter.js";
 
 const safeTools = new Map([
   ["memory.add", {
@@ -30,6 +31,11 @@ const safeTools = new Map([
     policyLevel: "read",
     description: "Reopen a completed task.",
     run: ({ id }) => updateTask(id, { status: "open" })
+  }],
+  ["terminal.diagnostics", {
+    policyLevel: "read",
+    description: "Run one allowlisted local terminal diagnostic for CLI configuration.",
+    run: ({ id }) => runTerminalDiagnostic(id)
   }]
 ]);
 

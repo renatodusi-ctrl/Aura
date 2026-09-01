@@ -49,6 +49,17 @@
       <section class="cockpit">
         <section class="command-center" aria-label="Centro de comando AURA">
           <div class="voice-panel">
+            <div class="presence-console">
+              <button id="aura-core" class="orb-wrap" type="button" data-voice="idle" aria-label="Nucleo da AURA em standby">
+                <span class="orb-hud" aria-hidden="true"></span>
+                <canvas id="aura-core-canvas" class="neural-canvas" aria-hidden="true"></canvas>
+              </button>
+              <div class="presence-copy">
+                <p class="eyebrow" id="aura-core-label">Standby</p>
+                <h2>AURA acompanha seu proximo passo</h2>
+                <p>Fale “Aura” para ativar a conversa ou escreva uma demanda para o cockpit transformar em acao.</p>
+              </div>
+            </div>
             <div class="panel-header">
               <div>
                 <h2>Comando AURA</h2>
@@ -63,7 +74,7 @@
             <div id="command-brief" class="command-brief" aria-live="polite"></div>
             <div id="voice-metrics" class="voice-metrics" aria-live="polite"></div>
 
-            <details class="transcript-drawer">
+            <details class="transcript-drawer" open>
               <summary>Transcricao da conversa</summary>
               <div id="conversation" class="conversation" aria-live="polite"></div>
             </details>
@@ -96,7 +107,7 @@
           </section>
         </section>
 
-        <details class="support-drawer">
+        <details class="support-drawer" open>
           <summary>Conselho, captura e diagnosticos</summary>
           <aside class="side-panel">
             <section class="council-section" aria-labelledby="council-heading">
@@ -138,46 +149,48 @@
         </details>
       </section>
 
-      <details class="jobs-panel panel secondary-surface" aria-labelledby="jobs-heading">
-        <summary>Fila operacional</summary>
-        <div class="section-row">
-          <div>
-            <p class="eyebrow">Fila operacional</p>
-            <h2 id="jobs-heading">Demandas e proximos passos</h2>
+      <aside class="left-rail" aria-label="Fila e contexto local">
+        <details class="jobs-panel panel secondary-surface" aria-labelledby="jobs-heading" open>
+          <summary>Fila operacional</summary>
+          <div class="section-row">
+            <div>
+              <p class="eyebrow">Fila operacional</p>
+              <h2 id="jobs-heading">Demandas e proximos passos</h2>
+            </div>
+            <button id="jobs-refresh-button" type="button">Atualizar</button>
           </div>
-          <button id="jobs-refresh-button" type="button">Atualizar</button>
-        </div>
-        <div id="demand-history-summary" class="demand-history-summary" aria-live="polite"></div>
-        <div class="demand-filters" aria-label="Filtros do historico de demandas">
-          <button type="button" data-demand-filter="all" aria-pressed="true">Todas</button>
-          <button type="button" data-demand-filter="needs">Aguardando voce</button>
-          <button type="button" data-demand-filter="running">Rodando</button>
-          <button type="button" data-demand-filter="failed">Falhou</button>
-          <button type="button" data-demand-filter="done">Concluido</button>
-        </div>
-        <div class="jobs-layout">
-          <ul id="job-list" class="job-list"></ul>
-          <article id="job-detail" class="job-detail" aria-live="polite"></article>
-        </div>
-      </details>
+          <div id="demand-history-summary" class="demand-history-summary" aria-live="polite"></div>
+          <div class="demand-filters" aria-label="Filtros do historico de demandas">
+            <button type="button" data-demand-filter="all" aria-pressed="true">Todas</button>
+            <button type="button" data-demand-filter="needs">Aguardando voce</button>
+            <button type="button" data-demand-filter="running">Rodando</button>
+            <button type="button" data-demand-filter="failed">Falhou</button>
+            <button type="button" data-demand-filter="done">Concluido</button>
+          </div>
+          <div class="jobs-layout">
+            <ul id="job-list" class="job-list"></ul>
+            <article id="job-detail" class="job-detail" aria-live="polite"></article>
+          </div>
+        </details>
 
-      <details class="session-panel panel secondary-surface" aria-labelledby="session-heading">
-        <summary>Contexto local</summary>
-        <div class="section-row">
-          <h2 id="session-heading">Contexto local</h2>
-          <div class="session-tabs" role="tablist" aria-label="Contexto local">
-            <button type="button" role="tab" data-session-tab="tasks" aria-selected="true">Tarefas</button>
-            <button type="button" role="tab" data-session-tab="github" aria-selected="false">GitHub</button>
-            <button type="button" role="tab" data-session-tab="routine" aria-selected="false">Rotina</button>
-            <button type="button" role="tab" data-session-tab="memory" aria-selected="false">Memoria</button>
-            <button type="button" role="tab" data-session-tab="costs" aria-selected="false">Controle de Custos</button>
-            <button type="button" role="tab" data-session-tab="files" aria-selected="false">Arquivos</button>
-            <button type="button" role="tab" data-session-tab="codex" aria-selected="false">Codex</button>
-            <button type="button" role="tab" data-session-tab="tools" aria-selected="false">Ferramentas</button>
-            <button type="button" role="tab" data-session-tab="events" aria-selected="false">Eventos</button>
+        <details class="session-panel panel secondary-surface" aria-labelledby="session-heading" open>
+          <summary>Contexto local</summary>
+          <div class="section-row">
+            <h2 id="session-heading">Contexto local</h2>
+            <div class="session-tabs" role="tablist" aria-label="Contexto local">
+              <button type="button" role="tab" data-session-tab="tasks" aria-selected="true">Tarefas</button>
+              <button type="button" role="tab" data-session-tab="github" aria-selected="false">GitHub</button>
+              <button type="button" role="tab" data-session-tab="routine" aria-selected="false">Rotina</button>
+              <button type="button" role="tab" data-session-tab="memory" aria-selected="false">Memoria</button>
+              <button type="button" role="tab" data-session-tab="costs" aria-selected="false">Controle de Custos</button>
+              <button type="button" role="tab" data-session-tab="files" aria-selected="false">Arquivos</button>
+              <button type="button" role="tab" data-session-tab="codex" aria-selected="false">Codex</button>
+              <button type="button" role="tab" data-session-tab="terminal" aria-selected="false">Terminal</button>
+              <button type="button" role="tab" data-session-tab="tools" aria-selected="false">Ferramentas</button>
+              <button type="button" role="tab" data-session-tab="events" aria-selected="false">Eventos</button>
+            </div>
           </div>
-        </div>
-        <div id="local-context-summary" class="local-context-summary" aria-live="polite"></div>
+          <div id="local-context-summary" class="local-context-summary" aria-live="polite"></div>
 
         <div class="workspace-tab" data-session-panel="tasks" role="tabpanel">
           <h2>Tarefas</h2>
@@ -256,6 +269,17 @@
           <div id="codex-activity-panel" class="codex-activity-panel" aria-live="polite"></div>
         </div>
 
+        <div class="workspace-tab" data-session-panel="terminal" role="tabpanel" hidden>
+          <div class="section-row">
+            <div>
+              <h2>Terminal seguro</h2>
+              <p class="panel-copy">Consultas permitidas para diagnosticar CLIs locais sem expor segredos.</p>
+            </div>
+            <button id="terminal-refresh-button" type="button">Atualizar</button>
+          </div>
+          <div id="terminal-panel" class="terminal-panel" aria-live="polite"></div>
+        </div>
+
         <div class="workspace-tab" data-session-panel="tools" role="tabpanel" hidden>
           <h2>Ferramentas</h2>
           <ul id="tools-list" class="tools"></ul>
@@ -265,7 +289,8 @@
           <h2>Eventos</h2>
           <ul id="event-log" class="events"></ul>
         </div>
-      </details>
+        </details>
+      </aside>
 
       <section class="integrations-carousel-panel" aria-labelledby="integrations-heading">
         <div class="section-row">

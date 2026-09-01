@@ -52,6 +52,7 @@ import { synthesizeDebate } from "./debateSynthesizer.js";
 import { handleVoiceIntent } from "./voiceIntents.js";
 import { buildVoiceHealth } from "./voiceHealth.js";
 import { getGitHubIssue, githubStatus, listGitHubIssues } from "./githubAdapter.js";
+import { listTerminalDiagnostics, runTerminalDiagnostic } from "./terminalAdapter.js";
 import { rememberDecision, rememberJobEvent, rememberPreference, sessionMemorySummary } from "./sessionMemory.js";
 import { redactText } from "./redaction.js";
 import { filteredToolEnv, killProcessTree, prepareToolSpawn, spawnToolSync } from "./processTools.js";
@@ -174,6 +175,14 @@ async function route(req, res) {
 
   if (url.pathname === "/api/codex/activity" && method === "GET") {
     return sendJson(res, 200, await codexActivityPayload());
+  }
+
+  if (url.pathname === "/api/terminal/commands" && method === "GET") {
+    return sendJson(res, 200, { commands: listTerminalDiagnostics() });
+  }
+
+  if (url.pathname === "/api/terminal/run" && method === "POST") {
+    return terminalRunRoute(req, res);
   }
 
   if (url.pathname === "/api/github/status" && method === "GET") {
@@ -511,7 +520,7 @@ function geminiLiveSetupPayload() {
 }
 
 function geminiLiveInstructions() {
-  return `${systemPrompt}\n\nVoz Gemini Live:\n- Voce e AURA, uma assistente pessoal por voz.\n- Fale sempre em portugues brasileiro natural.\n- Responda com frases curtas e objetivas.\n- A sessao comeca em standby silencioso. Responda somente quando a fala contiver claramente o nome Aura.\n- Se ouvir ate logo Aura, obrigado Aura, pode descansar Aura ou tchau Aura, responda brevemente e volte ao standby.\n- Quando o usuario pedir para criar task ou demanda, use as ferramentas disponiveis.\n- Quando o usuario pedir para ver pastas, projetos, arquivos locais ou o que existe no workspace, use aura_list_local_folder. A ferramenta e somente leitura e limitada as raizes permitidas.\n- Quando o usuario perguntar o que esta em andamento no Codex, use aura_codex_activity.`;
+  return `${systemPrompt}\n\nVoz Gemini Live:\n- Voce e AURA, uma assistente pessoal por voz.\n- Fale sempre em portugues brasileiro natural.\n- Responda com frases curtas e objetivas.\n- A sessao comeca em standby silencioso. Responda somente quando a fala contiver claramente o nome Aura.\n- Se ouvir ate logo Aura, obrigado Aura, pode descansar Aura ou tchau Aura, responda brevemente e volte ao standby.\n- Quando o usuario pedir para criar task ou demanda, use as ferramentas disponiveis.\n- Quando o usuario pedir para ver pastas, projetos, arquivos locais ou o que existe no workspace, use aura_list_local_folder. A ferramenta e somente leitura e limitada as raizes permitidas.\n- Quando o usuario perguntar o que esta em andamento no Codex, use aura_codex_activity.\n- Quando o usuario pedir status, versao ou configuracao dos CLIs, use aura_terminal_diagnostic com o diagnostico permitido mais adequado.`;
 }
 
 function geminiFunctionDeclarations() {
@@ -571,6 +580,30 @@ function geminiFunctionDeclarations() {
       parameters: {
         type: "OBJECT",
         properties: {}
+      }
+    },
+    {
+      name: "aura_terminal_diagnostic",
+      description: "Executa uma consulta segura e permitida de terminal para diagnosticar CLIs locais.",
+      parameters: {
+        type: "OBJECT",
+        properties: {
+          id: {
+            type: "STRING",
+            enum: [
+              "node.version",
+              "npm.version",
+              "codex.version",
+              "gemini.version",
+              "grok.version",
+              "openrouter.version",
+              "github.auth",
+              "aura.env.presence"
+            ],
+            description: "Diagnostico permitido por ID."
+          }
+        },
+        required: ["id"]
       }
     }
   ];
@@ -1214,6 +1247,15 @@ function responseForCommandOutput(output) {
     ...output,
     error: output.job.error || output.job.summary || "Command execution failed."
   };
+}
+
+async function terminalRunRoute(req, res) {
+  try {
+    const body = await readJson(req);
+    return sendJson(res, 200, { result: runTerminalDiagnostic(body.id) });
+  } catch (error) {
+    return sendJson(res, error.statusCode || 500, { error: error.message || "Could not run terminal diagnostic." });
+  }
 }
 
 async function githubIssuesRoute(url, res) {
@@ -2242,7 +2284,31 @@ function realtimeSessionPayload() {
     session: {
       type: "realtime",
       model: config.realtimeModel,
-      instructions: `${systemPrompt}\n\nVoz e idioma:\n- Fale sempre em portugues brasileiro natural.\n- Use ritmo calmo, frases curtas e tom de assistente pessoal proximo.\n- Evite sotaque estrangeiro, traducoes literais e palavras em ingles quando houver equivalente comum em portugues.\n\nProtocolo de ativacao por voz:\n- A sessao começa em standby silencioso. Nao cumprimente e nao inicie conversa ao conectar.\n- Em standby, responda somente quando a fala do usuario contiver claramente o nome Aura.\n- Quando ouvir Aura junto de um pedido, considere a conversa ativa e responda ao pedido.\n- Enquanto a conversa estiver ativa, continue respondendo normalmente ate o usuario encerrar.\n- Se o usuario disser algo como ate logo Aura, obrigado Aura, pode descansar Aura ou tchau Aura, responda brevemente e volte para standby.\n- Depois de voltar ao standby, ignore falas sem Aura. Nao gere texto, audio nem chamadas de ferramenta para falas sem wake word.\n\nFerramentas por voz:\n- Se precisar criar uma task no cockpit, use aura_create_task e depois confirme em voz curta.\n- Se o usuario pedir para desenvolver uma task existente, use aura_develop_task. Se nao disser executor, assuma Codex.\n- Se citar Conselho, Gemini, Grok ou OpenRouter, use executor council para analise ou codex-council quando tambem pedir Codex.\n- Se o usuario pedir desenvolvimento sem citar task, use aura_create_development_demand.\n- Se o usuario pedir para ver pastas, projetos, arquivos locais ou o que existe no workspace, use aura_list_local_folder. A ferramenta e somente leitura e limitada as raizes permitidas.\n- Se o usuario perguntar o que esta em andamento no Codex, use aura_codex_activity.\n- Demandas de desenvolvimento sempre ficam visiveis no cockpit e exigem confirmacao visual antes do Codex escrever.`,
+      instructions: [
+        systemPrompt,
+        "Voz e idioma:",
+        "- Fale sempre em portugues brasileiro natural.",
+        "- Use ritmo calmo, frases curtas e tom de assistente pessoal proximo.",
+        "- Evite sotaque estrangeiro, traducoes literais e palavras em ingles quando houver equivalente comum em portugues.",
+        "",
+        "Protocolo de ativacao por voz:",
+        "- A sessao comeca em standby silencioso. Nao cumprimente e nao inicie conversa ao conectar.",
+        "- Em standby, responda somente quando a fala do usuario contiver claramente o nome Aura.",
+        "- Quando ouvir Aura junto de um pedido, considere a conversa ativa e responda ao pedido.",
+        "- Enquanto a conversa estiver ativa, continue respondendo normalmente ate o usuario encerrar.",
+        "- Se o usuario disser algo como ate logo Aura, obrigado Aura, pode descansar Aura ou tchau Aura, responda brevemente e volte para standby.",
+        "- Depois de voltar ao standby, ignore falas sem Aura. Nao gere texto, audio nem chamadas de ferramenta para falas sem wake word.",
+        "",
+        "Ferramentas por voz:",
+        "- Se precisar criar uma task no cockpit, use aura_create_task e depois confirme em voz curta.",
+        "- Se o usuario pedir para desenvolver uma task existente, use aura_develop_task. Se nao disser executor, assuma Codex.",
+        "- Se citar Conselho, Gemini, Grok ou OpenRouter, use executor council para analise ou codex-council quando tambem pedir Codex.",
+        "- Se o usuario pedir desenvolvimento sem citar task, use aura_create_development_demand.",
+        "- Se o usuario pedir para ver pastas, projetos, arquivos locais ou o que existe no workspace, use aura_list_local_folder. A ferramenta e somente leitura e limitada as raizes permitidas.",
+        "- Se o usuario perguntar o que esta em andamento no Codex, use aura_codex_activity.",
+        "- Se o usuario pedir status, versao ou configuracao dos CLIs, use aura_terminal_diagnostic com o diagnostico permitido mais adequado.",
+        "- Demandas de desenvolvimento sempre ficam visiveis no cockpit e exigem confirmacao visual antes do Codex escrever."
+      ].join("\n"),
       audio: {
         input: {
           noise_reduction: {
@@ -2359,6 +2425,31 @@ function realtimeSessionPayload() {
           parameters: {
             type: "object",
             properties: {}
+          }
+        },
+        {
+          type: "function",
+          name: "aura_terminal_diagnostic",
+          description: "Executa uma consulta segura e permitida de terminal para diagnosticar CLIs locais.",
+          parameters: {
+            type: "object",
+            properties: {
+              id: {
+                type: "string",
+                enum: [
+                  "node.version",
+                  "npm.version",
+                  "codex.version",
+                  "gemini.version",
+                  "grok.version",
+                  "openrouter.version",
+                  "github.auth",
+                  "aura.env.presence"
+                ],
+                description: "Diagnostico permitido por ID."
+              }
+            },
+            required: ["id"]
           }
         }
       ],

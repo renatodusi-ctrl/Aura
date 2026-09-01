@@ -24,12 +24,22 @@ for (const id of ["voice-metrics"]) {
   assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
 }
 
+for (const id of ["aura-core", "aura-core-canvas", "aura-core-label"]) {
+  assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
+  assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
+}
+
 for (const id of ["purge-memories-button", "purge-screen-evidence-button"]) {
   assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
   assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
 }
 
 for (const id of ["github-refresh-button", "github-state-select", "github-panel"]) {
+  assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
+  assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
+}
+
+for (const id of ["terminal-refresh-button", "terminal-panel"]) {
   assert.match(html, new RegExp(`id="${id}"`), `Missing #${id} in cockpit HTML.`);
   assert.match(app, new RegExp(`#${id}`), `Missing #${id} binding in app.js.`);
 }
@@ -65,6 +75,9 @@ for (const token of [
   "formatCountdown",
   "screen.perception_ended",
   "renderVoiceMetrics",
+  "initAuraCore",
+  "renderAuraCoreState",
+  "buildAuraNeuralGraph",
   "voiceMetricsDetail",
   "renderMissionDecision",
   "mission-decision-card",
@@ -152,7 +165,12 @@ for (const token of [
   "renderGitHubIssues",
   "integrationItemForGitHub",
   "Virar task",
-  "/api/github/issues"
+  "/api/github/issues",
+  "renderTerminalDiagnostics",
+  "terminalDiagnosticFromRealtime",
+  "integrationItemForTerminal",
+  "Terminal seguro",
+  "/api/terminal/run"
 ]) {
   assert.match(app, new RegExp(token), `Missing jobs UI token: ${token}`);
 }
@@ -173,6 +191,11 @@ for (const token of [
   "council-briefing-block",
   "council-artifact-note",
   "mission-decision-card",
+  "presence-console",
+  "orb-wrap",
+  "neural-canvas",
+  "terminal-command-list",
+  "terminal-output",
   "confidence-low",
   "@media (max-width: 560px)"
 ]) {
